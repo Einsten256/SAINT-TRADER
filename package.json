@@ -1,0 +1,24 @@
+{
+  "name": "saint-crypto-backend",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@google/genai": "^2.20.0",
+    "axios": "^1.20.0",
+    "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.3",
+    "bybit-api": "^4.7.4",
+    "ccxt": "^4.5.76",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
+    "firebase": "^12.18.0",
+    "firebase-admin": "^14.3.0",
+    "node-cron": "^4.6.0",
+    "node-telegram-bot-api": "^2.1.0",
+    "ws": "^8.21.3"
+  }
+}

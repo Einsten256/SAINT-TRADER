@@ -1,0 +1,6 @@
+node_modules/
+.env
+*.log
+serviceAccountKey.json
+serviceAccountKey_old.json
+saint_crypto_state.json
