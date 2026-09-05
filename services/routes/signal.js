@@ -13,7 +13,7 @@ function createRouter({
   const { signal } = services;
 
   // ============================================================
-  // GET ACTIVE SIGNAL
+  // GET ACTIVE SIGNALS
   // ============================================================
 
   router.get(
@@ -23,22 +23,24 @@ function createRouter({
     async (req, res) => {
       try {
         const result =
-          await signal.getActiveSignal();
+          await signal.getActiveSignals(
+            req.uid
+          );
 
-        return res.json(result);
+        return res
+          .status(result?.success === false ? 400 : 200)
+          .json(result);
       } catch (error) {
         console.error(
-          "❌ Active signal error:",
+          "❌ Get active signals error:",
           error.message
         );
 
-        return res.status(
-          error.statusCode || 500
-        ).json({
+        return res.status(500).json({
           success: false,
           message:
             error.message ||
-            "Unable to load active signal.",
+            "Unable to load active signals.",
         });
       }
     }
@@ -55,20 +57,20 @@ function createRouter({
     async (req, res) => {
       try {
         const result =
-          await signal.getSignals({
-            uid: req.uid,
-          });
+          await signal.getActiveSignals(
+            req.uid
+          );
 
-        return res.json(result);
+        return res
+          .status(result?.success === false ? 400 : 200)
+          .json(result);
       } catch (error) {
         console.error(
-          "❌ Signals error:",
+          "❌ Get signals error:",
           error.message
         );
 
-        return res.status(
-          error.statusCode || 500
-        ).json({
+        return res.status(500).json({
           success: false,
           message:
             error.message ||
@@ -93,20 +95,20 @@ function createRouter({
             req.params.code
           );
 
-        return res.json(result);
+        return res
+          .status(result?.success === false ? 400 : 200)
+          .json(result);
       } catch (error) {
         console.error(
           "❌ Signal status error:",
           error.message
         );
 
-        return res.status(
-          error.statusCode || 404
-        ).json({
+        return res.status(400).json({
           success: false,
           message:
             error.message ||
-            "Signal not found.",
+            "Unable to check signal.",
         });
       }
     }
@@ -114,45 +116,113 @@ function createRouter({
 
   // ============================================================
   // REDEEM SIGNAL
+  //
+  // IMPORTANT:
+  //
+  // Firebase UID comes from verifyAuth:
+  //
+  //     req.uid
+  //
+  // Flutter only sends the signal code.
+  //
+  // Expected body:
+  //
+  // {
+  //   "code": "8FQ2M7KX91ZT"
+  // }
+  //
+  // The service expects:
+  //
+  //     redeemSignal(userId, body)
+  //
+  // Therefore we MUST call:
+  //
+  //     redeemSignal(req.uid, req.body)
+  //
+  // NOT:
+  //
+  //     redeemSignal({ uid: req.uid, code })
+  //
   // ============================================================
 
   router.post(
     "/api/signals/redeem",
+
     verifyAuth,
+
     strictLimiter,
+
     verifyFirestore,
+
     async (req, res) => {
       try {
+        // --------------------------------------------------------
+        // Validate request body
+        // --------------------------------------------------------
+
+        const body =
+          req.body &&
+          typeof req.body === "object"
+            ? req.body
+            : {};
+
         const code =
-          typeof req.body?.code === "string"
-            ? req.body.code.trim()
-            : "";
+          typeof body.code === "string"
+            ? body.code.trim()
+            : typeof body.signalCode === "string"
+              ? body.signalCode.trim()
+              : typeof body.signal_code === "string"
+                ? body.signal_code.trim()
+                : "";
 
         if (!code) {
           return res.status(400).json({
             success: false,
+            status: "INVALID_CODE",
             message:
               "Signal code is required.",
           });
         }
 
-        const result =
-          await signal.redeemSignal({
-            uid: req.uid,
-            code,
-          });
+        // --------------------------------------------------------
+        // IMPORTANT FIX
+        //
+        // redeemSignal(userId, body)
+        // --------------------------------------------------------
 
-        return res.json(result);
+        const result =
+          await signal.redeemSignal(
+            req.uid,
+            {
+              code,
+            }
+          );
+
+        // --------------------------------------------------------
+        // Return service result
+        // --------------------------------------------------------
+
+        return res
+          .status(
+            result?.success === false
+              ? 400
+              : 200
+          )
+          .json(result);
+
       } catch (error) {
         console.error(
-          "❌ Signal redemption error:",
-          error.message
+          `❌ Signal redemption error for ${req.uid || "unknown user"}:`,
+          error
         );
 
         return res.status(
           error.statusCode || 400
         ).json({
           success: false,
+          status:
+            error.code ||
+            "REDEMPTION_FAILED",
           message:
             error.message ||
             "Unable to redeem signal.",
@@ -162,8 +232,39 @@ function createRouter({
   );
 
   // ============================================================
-  // RETURN ROUTER
+  // SIGNAL REDEMPTION HISTORY
   // ============================================================
+
+  router.get(
+    "/api/signals/redemptions",
+    verifyAuth,
+    verifyFirestore,
+    async (req, res) => {
+      try {
+        const result =
+          await signal.getUserRedemptions(
+            req.uid,
+            req.query.limit
+          );
+
+        return res
+          .status(result?.success === false ? 400 : 200)
+          .json(result);
+      } catch (error) {
+        console.error(
+          "❌ Signal redemption history error:",
+          error.message
+        );
+
+        return res.status(500).json({
+          success: false,
+          message:
+            error.message ||
+            "Unable to load redemption history.",
+        });
+      }
+    }
+  );
 
   return router;
 }
