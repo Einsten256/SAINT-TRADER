@@ -752,6 +752,20 @@ async function findConfirmedDeposit(
 // to the central ledger so there is only one credit implementation.
 // ============================================================
 
+async function creditDepositToLedger(
+  depositId,
+  userId,
+  amount,
+  record
+) {
+  return ledger.creditDepositToLedger(
+    depositId,
+    userId,
+    amount,
+    record
+  );
+}
+
 // ============================================================
 // 11. CREATE PENDING DEPOSIT
 // ============================================================
