@@ -2378,7 +2378,17 @@ function startMarketSync() {
 
   try {
 
-    bybit.startMarketSync();
+    const started =
+      bybit.startMarketSync();
+
+    if (!started) {
+
+      console.log(
+        "ℹ️ Bybit market synchronization is disabled."
+      );
+
+      return false;
+    }
 
     console.log(
       "✅ Bybit market synchronization started."
@@ -2428,7 +2438,17 @@ async function startBybitWebSocket() {
 
   try {
 
-    await bybit.connectPrivateWebSocket();
+    const connected =
+      await bybit.connectPrivateWebSocket();
+
+    if (!connected) {
+
+      console.log(
+        "ℹ️ Bybit private WebSocket is disabled."
+      );
+
+      return false;
+    }
 
     console.log(
       "✅ Bybit private WebSocket connected."
