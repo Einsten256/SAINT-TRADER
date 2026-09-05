@@ -7,14 +7,10 @@
 // FIXED BYBIT SERVICE
 //
 // RESPONSIBILITIES:
-// - Bybit REST API
-// - Deposit verification
-// - Withdrawal submission
-// - Withdrawal status
-// - Live market prices
-// - Market price synchronization
-// - Market sentiment synchronization
-// - Private Bybit WebSocket
+// - Bybit REST API for deposit verification only
+// - Deposit monitoring / confirmation
+// - No automatic market-price pulling
+// - No private Bybit wallet WebSocket
 //
 // IMPORTANT:
 // This file does NOT import configuration from kendrick.js.
@@ -25,18 +21,6 @@ require("dotenv").config();
 
 const crypto = require("crypto");
 const WebSocket = require("ws");
-
-// node-cron is optional.
-// The service can still load if it is not installed.
-let cron = null;
-
-try {
-  cron = require("node-cron");
-} catch (error) {
-  console.warn(
-    "⚠️ node-cron is not installed. Automatic market sync disabled."
-  );
-}
 
 // Bybit SDK
 const {
@@ -186,46 +170,6 @@ const WITHDRAW_ACCOUNT_TYPE =
   );
 
 // ============================================================
-// ============================================================
-// BYBIT DIAGNOSTIC
-// ============================================================
-
-function printBybitDiagnostic() {
-  const safeKey =
-    BYBIT_API_KEY
-      ? `${BYBIT_API_KEY.slice(0, 4)}********${BYBIT_API_KEY.slice(-4)}`
-      : "<MISSING>";
-
-  console.log("");
-  console.log("============================================================");
-  console.log("[BYBIT DIAGNOSTIC] REST CONFIGURATION");
-  console.log("============================================================");
-  console.log(
-    `[BYBIT DIAGNOSTIC] TESTNET: ${BYBIT_TESTNET}`
-  );
-  console.log(
-    `[BYBIT DIAGNOSTIC] API KEY: ${safeKey}`
-  );
-  console.log(
-    `[BYBIT DIAGNOSTIC] API SECRET: ${
-      BYBIT_API_SECRET ? "<LOADED>" : "<MISSING>"
-    }`
-  );
-  console.log(
-    `[BYBIT DIAGNOSTIC] WITHDRAW COIN: ${WITHDRAW_COIN}`
-  );
-  console.log(
-    `[BYBIT DIAGNOSTIC] WITHDRAW CHAIN: ${WITHDRAW_CHAIN}`
-  );
-  console.log(
-    `[BYBIT DIAGNOSTIC] ACCOUNT TYPE: ${WITHDRAW_ACCOUNT_TYPE}`
-  );
-  console.log("============================================================");
-  console.log("");
-}
-
-printBybitDiagnostic();
-
 // 5. INTERNAL HELPERS
 // ============================================================
 
@@ -770,7 +714,7 @@ async function getWithdrawal(
 }
 
 // ============================================================
-// 15. GET TICKER
+// 15. LEGACY MARKET HELPERS (NOT STARTED)
 // ============================================================
 
 async function getTickerData(
@@ -829,7 +773,7 @@ async function getTicker(
 }
 
 // ============================================================
-// 16. SYNC ONE MARKET PRICE
+// 16. LEGACY MARKET SYNC HELPERS (NOT STARTED)
 // ============================================================
 
 const MARKET_HISTORY_LIMIT = 120;
@@ -1027,48 +971,10 @@ async function syncSentiment() {
 const MARKET_SYNC_INTERVAL_MS = 5000;
 
 function startMarketSync() {
-  if (marketTask) {
-    return;
-  }
-
-  console.log(
-    `🟢 Bybit live market synchronization started: every ${MARKET_SYNC_INTERVAL_MS / 1000} seconds.`
-  );
-
-  // Immediate first sync.
-  syncMarkets().catch(
-    (error) =>
-      console.warn(
-        "⚠️ Initial market sync:",
-        error.message
-      )
-  );
-
-  syncSentiment().catch(
-    (error) =>
-      console.warn(
-        "⚠️ Initial sentiment sync:",
-        error.message
-      )
-  );
-
-  marketTask = setInterval(() => {
-    syncMarkets().catch(
-      (error) =>
-        console.warn(
-          "⚠️ Scheduled market sync:",
-          error.message
-        )
-    );
-
-    syncSentiment().catch(
-      (error) =>
-        console.warn(
-          "⚠️ Scheduled sentiment sync:",
-          error.message
-        )
-    );
-  }, MARKET_SYNC_INTERVAL_MS);
+  // Intentionally disabled.
+  // Bybit is used here for deposit monitoring only.
+  // Flutter market data is sourced through Firebase instead.
+  return false;
 }
 
 // ============================================================
@@ -1076,19 +982,13 @@ function startMarketSync() {
 // ============================================================
 
 function stopMarketSync() {
-  if (!marketTask) {
-    return;
+  if (marketTask) {
+    try {
+      clearInterval(marketTask);
+    } catch (_) {}
+    marketTask = null;
   }
-
-  try {
-    clearInterval(marketTask);
-  } catch (_) {}
-
-  marketTask = null;
-
-  console.log(
-    "🛑 Bybit market synchronization stopped."
-  );
+  return true;
 }
 
 // ============================================================
@@ -1096,203 +996,9 @@ function stopMarketSync() {
 // ============================================================
 
 async function connectPrivateWebSocket() {
-  if (!isBybitConfigured()) {
-    console.warn(
-      "⚠️ Private Bybit WebSocket not started: credentials missing."
-    );
-
-    return;
-  }
-
-  if (
-    ws &&
-    ws.readyState ===
-      WebSocket.OPEN
-  ) {
-    return;
-  }
-
-  const url =
-    BYBIT_TESTNET
-      ? "wss://stream-testnet.bybit.com/v5/private"
-      : "wss://stream.bybit.com/v5/private";
-
-  try {
-    ws =
-      new WebSocket(
-        url
-      );
-
-    ws.on(
-      "open",
-      () => {
-        try {
-          const expires =
-            Date.now() +
-            10000;
-
-          const signature =
-            crypto
-              .createHmac(
-                "sha256",
-                BYBIT_API_SECRET
-              )
-              .update(
-                `GET/realtime${expires}`
-              )
-              .digest(
-                "hex"
-              );
-
-          ws.send(
-            JSON.stringify({
-              op: "auth",
-              args: [
-                BYBIT_API_KEY,
-                expires,
-                signature,
-              ],
-            })
-          );
-
-          if (pingTimer) {
-            clearInterval(
-              pingTimer
-            );
-          }
-
-          pingTimer =
-            setInterval(
-              () => {
-                if (
-                  ws &&
-                  ws.readyState ===
-                    WebSocket.OPEN
-                ) {
-                  try {
-                    ws.send(
-                      JSON.stringify({
-                        op: "ping",
-                      })
-                    );
-                  } catch (_) {}
-                }
-              },
-              20000
-            );
-
-          console.log(
-            "🟢 Bybit private WebSocket connected."
-          );
-        } catch (error) {
-          console.warn(
-            "⚠️ WebSocket authentication error:",
-            error.message
-          );
-        }
-      }
-    );
-
-    ws.on(
-      "message",
-      (raw) => {
-        try {
-          const message =
-            JSON.parse(
-              raw.toString()
-            );
-
-          if (
-            message.op ===
-              "auth" &&
-            message.success
-          ) {
-            console.log(
-              "✅ Bybit WebSocket authenticated."
-            );
-
-            ws.send(
-              JSON.stringify({
-                op: "subscribe",
-                args: [
-                  "wallet",
-                ],
-              })
-            );
-          }
-
-          // Wallet updates can be consumed
-          // by another service later.
-          if (
-            message.topic ===
-            "wallet"
-          ) {
-            // Intentionally no automatic
-            // ledger mutation here.
-            //
-            // External Bybit wallet state must
-            // never silently overwrite the
-            // Saint Crypto internal ledger.
-          }
-        } catch (error) {
-          console.warn(
-            "⚠️ WebSocket parse error:",
-            error.message
-          );
-        }
-      }
-    );
-
-    ws.on(
-      "error",
-      (error) => {
-        console.warn(
-          "⚠️ Bybit WebSocket error:",
-          error.message
-        );
-      }
-    );
-
-    ws.on(
-      "close",
-      () => {
-        if (pingTimer) {
-          clearInterval(
-            pingTimer
-          );
-
-          pingTimer = null;
-        }
-
-        ws = null;
-
-        if (
-          !reconnectTimer
-        ) {
-          reconnectTimer =
-            setTimeout(
-              () => {
-                reconnectTimer =
-                  null;
-
-                connectPrivateWebSocket()
-                  .catch(
-                    () => {}
-                  );
-              },
-              3000
-            );
-        }
-      }
-    );
-  } catch (error) {
-    console.warn(
-      "⚠️ Could not create Bybit WebSocket:",
-      error.message
-    );
-
-    ws = null;
-  }
+  // Intentionally disabled.
+  // This service does not maintain a private Bybit wallet websocket.
+  return false;
 }
 
 // ============================================================
@@ -1301,18 +1007,12 @@ async function connectPrivateWebSocket() {
 
 function closePrivateWebSocket() {
   if (reconnectTimer) {
-    clearTimeout(
-      reconnectTimer
-    );
-
+    clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
 
   if (pingTimer) {
-    clearInterval(
-      pingTimer
-    );
-
+    clearInterval(pingTimer);
     pingTimer = null;
   }
 
@@ -1321,13 +1021,10 @@ function closePrivateWebSocket() {
       ws.removeAllListeners();
       ws.close();
     } catch (_) {}
-
     ws = null;
   }
 
-  console.log(
-    "🛑 Bybit private WebSocket closed."
-  );
+  return true;
 }
 
 // ============================================================
