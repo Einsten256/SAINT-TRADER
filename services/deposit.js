@@ -634,6 +634,12 @@ async function findConfirmedDeposit(
       expected
     );
 
+  if (!TRONGRID_API_KEY) {
+    throw new Error(
+      "TRON deposit verification is not configured: TRONGRID_API_KEY is missing."
+    );
+  }
+
   const transaction =
     await tronRequest(
       "/walletsolidity/gettransactionbyid",
@@ -1803,11 +1809,15 @@ function getConfig() {
 
     tronGridConfigured:
       Boolean(
-        TRONGRID_BASE_URL
+        TRONGRID_BASE_URL &&
+        TRONGRID_API_KEY
       ),
 
     tokenContract:
       USDT_TRC20_CONTRACT,
+
+    tronGridApiKeyConfigured:
+      Boolean(TRONGRID_API_KEY),
 
     monitorMinutes:
       DEPOSIT_MONITOR_MINUTES,
