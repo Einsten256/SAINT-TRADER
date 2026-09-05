@@ -4,9 +4,13 @@
 // SAINT CRYPTO — WITHDRAWAL WALLET ROUTES
 // services/routes/withdrawal_wallet.js
 //
-// This is separate from an actual withdrawal request.
-// The user saves the wallet in advance so admin can prepare it
-// in Bybit and handle any new-address security delay.
+// Purpose:
+// - Save the user's first USDT TRC20 withdrawal wallet.
+// - Allow the user to REQUEST a wallet change later.
+// - Never replace the active wallet directly from Flutter.
+// - Keep the active wallet protected until the change is approved.
+// - No withdrawal request is created by these routes.
+// - No ledger/funds are touched by these routes.
 // ============================================================
 
 const express = require("express");
@@ -37,6 +41,33 @@ function createRouter({
     next();
   }
 
+  function requireWalletChangeService(req, res, next) {
+    if (
+      !withdrawalWallet ||
+      typeof withdrawalWallet.requestWithdrawalWalletChange !==
+        "function"
+    ) {
+      return res.status(503).json({
+        success: false,
+        code: "WITHDRAWAL_WALLET_CHANGE_UNAVAILABLE",
+        message:
+          "Withdrawal wallet change service is not available.",
+      });
+    }
+
+    next();
+  }
+
+  function responseStatus(result, fallbackSuccess = 200) {
+    const status = Number(result?.httpStatus);
+
+    if (status >= 200 && status <= 599) {
+      return status;
+    }
+
+    return result?.success ? fallbackSuccess : 400;
+  }
+
   // ============================================================
   // GET CURRENT WITHDRAWAL WALLET
   //
@@ -53,18 +84,10 @@ function createRouter({
         const result =
           await withdrawalWallet.getWithdrawalWallet(req.uid);
 
-        const status = Number(result?.httpStatus);
-
         return res
-          .status(
-            status >= 200 && status <= 599
-              ? status
-              : result?.success
-              ? 200
-              : 400
-          )
+          .status(responseStatus(result))
           .json({
-            success: result?.success ?? true,
+            success: result?.success ?? false,
             ...result,
           });
       } catch (error) {
@@ -85,7 +108,7 @@ function createRouter({
   );
 
   // ============================================================
-  // SAVE CURRENT WITHDRAWAL WALLET
+  // SAVE FIRST WITHDRAWAL WALLET
   //
   // POST /api/withdrawal-wallet
   //
@@ -95,10 +118,10 @@ function createRouter({
   // }
   //
   // IMPORTANT:
+  // - This endpoint may save ONLY the first wallet.
+  // - An existing locked wallet cannot be replaced here.
   // - No withdrawal is created.
   // - No funds are touched.
-  // - No Fund PIN is required.
-  // - The first saved address becomes locked.
   // ============================================================
 
   router.post(
@@ -130,16 +153,8 @@ function createRouter({
             address
           );
 
-        const status = Number(result?.httpStatus);
-
         return res
-          .status(
-            status >= 200 && status <= 599
-              ? status
-              : result?.success
-              ? 200
-              : 400
-          )
+          .status(responseStatus(result))
           .json({
             success: result?.success ?? false,
             ...result,
@@ -158,6 +173,81 @@ function createRouter({
           message:
             error.message ||
             "Unable to save your withdrawal wallet.",
+        });
+      }
+    }
+  );
+
+  // ============================================================
+  // REQUEST A NEW WITHDRAWAL WALLET
+  //
+  // POST /api/withdrawal-wallet/change
+  //
+  // Body:
+  // {
+  //   "address": "T..."
+  // }
+  //
+  // IMPORTANT:
+  // - This does NOT replace the active wallet.
+  // - This creates a pending wallet-change request.
+  // - Existing withdrawals continue using their original
+  //   destination snapshot.
+  // - The service must require admin/security approval before
+  //   promoting the new address to the active locked wallet.
+  // - No funds are touched.
+  // ============================================================
+
+  router.post(
+    "/api/withdrawal-wallet/change",
+    verifyAuth,
+    strictLimiter,
+    verifyFirestore,
+    requireWalletChangeService,
+    async (req, res) => {
+      try {
+        const address = String(
+          req.body?.address ||
+            req.body?.newAddress ||
+            req.body?.withdrawalWalletAddress ||
+            ""
+        ).trim();
+
+        if (!address) {
+          return res.status(400).json({
+            success: false,
+            code: "ADDRESS_REQUIRED",
+            message:
+              "Please enter the new USDT TRC20 wallet address.",
+          });
+        }
+
+        const result =
+          await withdrawalWallet.requestWithdrawalWalletChange(
+            req.uid,
+            address
+          );
+
+        return res
+          .status(responseStatus(result))
+          .json({
+            success: result?.success ?? false,
+            ...result,
+          });
+      } catch (error) {
+        console.error(
+          "❌ Withdrawal wallet CHANGE:",
+          error.message
+        );
+
+        return res.status(500).json({
+          success: false,
+          code:
+            error.code ||
+            "WITHDRAWAL_WALLET_CHANGE_FAILED",
+          message:
+            error.message ||
+            "Unable to request a withdrawal wallet change.",
         });
       }
     }

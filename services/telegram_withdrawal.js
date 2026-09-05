@@ -7,7 +7,8 @@
 // No new bot is required.
 //
 // Visible workflow:
-// UNDER REVIEW -> Telegram APPROVE -> PROCESSING -> DISBURSED/FAILED
+// UNDER REVIEW -> Telegram APPROVE -> AWAITING PAYMENT -> TXID SUBMITTED -> COMPLETED/FAILED
+// Admin manually sends the net payout. This module never sends withdrawals to Bybit.
 //
 // This module uses Telegram long polling so it works locally
 // without requiring a public webhook URL.
@@ -55,6 +56,9 @@ const ADMIN_IDS =
 let pollingStarted = false;
 let pollingLoopRunning = false;
 let updateOffset = 0;
+
+// Admin -> withdrawal awaiting a TXID reply.
+const pendingTxidEntry = new Map();
 
 function isConfigured() {
   return Boolean(
@@ -130,7 +134,7 @@ function escapeMarkdown(value) {
 // Do NOT escape periods, hyphens, etc. inside code spans.
 function escapeCode(value) {
   return String(value ?? "")
-    .replace(/([\\`])/g, "\\$1");
+    .replace(/([\`])/g, "\\$1");
 }
 
 async function notifyWithdrawalUnderReview(
@@ -210,6 +214,12 @@ async function notifyWithdrawalUnderReview(
                 callback_data:
                   `withdrawal:approve:${withdrawalId}`,
               },
+              {
+                text:
+                  "❌ REJECT",
+                callback_data:
+                  `withdrawal:reject:${withdrawalId}`,
+              },
             ],
           ],
         },
@@ -266,6 +276,69 @@ async function approveWithdrawal(
   );
 }
 
+async function rejectWithdrawal(
+  withdrawalId,
+  telegramUser
+) {
+  if (!isAuthorizedAdmin(telegramUser?.id)) {
+    throw new Error(
+      "You are not authorized to reject withdrawals."
+    );
+  }
+
+  if (
+    !withdrawalService ||
+    typeof withdrawalService.restoreWithdrawal !==
+      "function"
+  ) {
+    throw new Error(
+      "Withdrawal rejection service is unavailable."
+    );
+  }
+
+  const db = getFirestore();
+  const ref =
+    db.collection("withdrawals")
+      .doc(withdrawalId);
+
+  const snapshot =
+    await ref.get();
+
+  if (!snapshot.exists) {
+    throw new Error(
+      "Withdrawal record not found."
+    );
+  }
+
+  const data =
+    snapshot.data() || {};
+
+  const status =
+    String(data.status || "").toUpperCase();
+
+  if (
+    status !== "UNDER_REVIEW" &&
+    status !== "AWAITING_PAYMENT"
+  ) {
+    throw new Error(
+      `This withdrawal is already ${status || "UNKNOWN"}.`
+    );
+  }
+
+  await withdrawalService.restoreWithdrawal(
+    withdrawalId,
+    "Rejected by Telegram administrator."
+  );
+
+  for (const [adminId, pendingId] of pendingTxidEntry.entries()) {
+    if (pendingId === withdrawalId) {
+      pendingTxidEntry.delete(adminId);
+    }
+  }
+
+  return data;
+}
+
 async function handleCallbackQuery(
   callbackQuery
 ) {
@@ -284,11 +357,17 @@ async function handleCallbackQuery(
     `[TELEGRAM] Callback received: user=${String(from.id || "unknown")} data=${data}`
   );
 
-  if (
-    !data.startsWith(
+  const isApprove =
+    data.startsWith(
       "withdrawal:approve:"
-    )
-  ) {
+    );
+
+  const isReject =
+    data.startsWith(
+      "withdrawal:reject:"
+    );
+
+  if (!isApprove && !isReject) {
     if (callbackId) {
       await telegramApi(
         "answerCallbackQuery",
@@ -296,7 +375,7 @@ async function handleCallbackQuery(
           callback_query_id:
             callbackId,
           text:
-            "Unknown approval action.",
+            "Unknown withdrawal action.",
           show_alert: true,
         }
       );
@@ -304,9 +383,14 @@ async function handleCallbackQuery(
     return;
   }
 
+  const actionPrefix =
+    isApprove
+      ? "withdrawal:approve:"
+      : "withdrawal:reject:";
+
   const withdrawalId =
     data.substring(
-      "withdrawal:approve:".length
+      actionPrefix.length
     ).trim();
 
   // Acknowledge Telegram immediately. Do not wait for Firestore.
@@ -320,7 +404,11 @@ async function handleCallbackQuery(
           callback_query_id:
             callbackId,
           text:
-            "Approval received. Processing...",
+            isApprove
+              ? "Approval received."
+              : isReject
+                ? "Rejection received."
+                : "TXID entry requested.",
         }
       );
     } catch (callbackError) {
@@ -340,12 +428,75 @@ async function handleCallbackQuery(
       );
     }
 
-    // Admin approval immediately starts the Bybit payout.
-    // There is no second user confirmation.
-    await approveWithdrawal(
-      withdrawalId,
-      from
-    );
+    if (isApprove) {
+      // Approval only authorizes manual payout.
+      // It NEVER sends a withdrawal to Bybit.
+      await approveWithdrawal(
+        withdrawalId,
+        from
+      );
+    } else if (isReject) {
+      await rejectWithdrawal(
+        withdrawalId,
+        from
+      );
+    } else {
+      const db = getFirestore();
+      const ref =
+        db.collection("withdrawals")
+          .doc(withdrawalId);
+
+      const snapshot =
+        await ref.get();
+
+      if (!snapshot.exists) {
+        throw new Error("Withdrawal record not found.");
+      }
+
+      const record =
+        snapshot.data() || {};
+
+      const status =
+        String(record.status || "").toUpperCase();
+
+      if (status !== "AWAITING_PAYMENT") {
+        throw new Error(
+          `This withdrawal is ${status || "UNKNOWN"} and is not awaiting payment.`
+        );
+      }
+
+      pendingTxidEntry.set(
+        String(from.id),
+        withdrawalId
+      );
+
+      await telegramApi(
+        "sendMessage",
+        {
+          chat_id:
+            callbackQuery?.message?.chat?.id ||
+            TELEGRAM_CHAT_ID,
+          text: [
+            "📋 *ENTER PAYMENT TXID*",
+            "",
+            `🆔 *Withdrawal ID:* \`${escapeCode(withdrawalId)}\``,
+            `💰 *Send:* \`${money(record.netPayout)} USDT\``,
+            `🌐 *Network:* \`${escapeCode(record.destinationNetwork || "TRC20")}\``,
+            "",
+            escapeMarkdown(
+              "Reply to this message with the TXID after you manually send the USDT."
+            ),
+          ].join("\n"),
+          parse_mode: "MarkdownV2",
+          reply_markup: {
+            force_reply: true,
+            input_field_placeholder: "Paste the transaction TXID"
+          }
+        }
+      );
+
+      return;
+    }
 
     const db =
       getFirestore();
@@ -366,21 +517,42 @@ async function handleCallbackQuery(
       callbackQuery.message;
 
     const processingText =
-      [
-        "🟠 *WITHDRAWAL PROCESSING*",
-        "",
-        `🆔 *Withdrawal ID:* \`${escapeCode(withdrawalId)}\``,
-        `👤 *User ID:* \`${escapeCode(record.userId)}\``,
-        "",
-        `💵 *Gross Amount:* \`${money(record.grossAmount)} USDT\``,
-        `💳 *Charge Fee:* \`${money(record.feeDeducted)} USDT\``,
-        `💰 *Net Payout:* \`${money(record.netPayout)} USDT\``,
-        "",
-        `🌐 *Network:* \`${escapeCode(record.destinationNetwork || "TRC20")}\``,
-        `📬 *Wallet:* \`${escapeCode(record.destinationAddress)}\``,
-        "",
-        "🟠 *Status: PROCESSING*",
-      ].join("\\n");
+      isApprove
+        ? [
+            "🟠 *PAYMENT REQUIRED*",
+            "",
+            `🆔 *Withdrawal ID:* \`${escapeCode(withdrawalId)}\``,
+            `👤 *User ID:* \`${escapeCode(record.userId)}\``,
+            "",
+            `💵 *Gross Amount:* \`${money(record.grossAmount)} USDT\``,
+            `💳 *Charge Fee:* \`${money(record.feeDeducted)} USDT\``,
+            `💰 *SEND TO USER:* \`${money(record.netPayout)} USDT\``,
+            "",
+            `🌐 *Network:* \`${escapeCode(record.destinationNetwork || "TRC20")}\``,
+            `🏦 *Coin:* \`${escapeCode(record.coin || "USDT")}\``,
+            `📬 *Wallet:* \`${escapeCode(record.destinationAddress)}\``,
+            "",
+            "🟠 *Status: AWAITING PAYMENT*",
+            "",
+            escapeMarkdown(
+              "Manually send the net payout to the wallet above, then press ENTER TXID and submit the blockchain transaction ID."
+            ),
+          ].join("\n")
+        : [
+            "🔴 *WITHDRAWAL REJECTED*",
+            "",
+            `🆔 *Withdrawal ID:* \`${escapeCode(withdrawalId)}\``,
+            `👤 *User ID:* \`${escapeCode(record.userId)}\``,
+            "",
+            `💵 *Gross Amount:* \`${money(record.grossAmount)} USDT\``,
+            `💳 *Charge Fee:* \`${money(record.feeDeducted)} USDT\``,
+            "",
+            "🔴 *Status: REJECTED*",
+            "",
+            escapeMarkdown(
+              "The reserved withdrawal funds have been restored to the user's Withdraw balance."
+            ),
+          ].join("\n");
 
     if (
       originalMessage?.chat?.id &&
@@ -399,7 +571,15 @@ async function handleCallbackQuery(
             parse_mode:
               "MarkdownV2",
             reply_markup: {
-              inline_keyboard: [],
+              inline_keyboard:
+                isApprove
+                  ? [[
+                      {
+                        text: "📋 ENTER TXID",
+                        callback_data: `withdrawal:enter_txid:${withdrawalId}`,
+                      },
+                    ]]
+                  : [],
             },
           }
         );
@@ -425,11 +605,123 @@ async function handleCallbackQuery(
             callbackId,
           text:
             error.message ||
-            "Approval failed.",
+            (isApprove
+              ? "Approval failed."
+              : "Rejection failed."),
           show_alert: true,
         }
       );
     }
+  }
+}
+
+async function handleTelegramMessage(message) {
+  const from = message?.from || {};
+  const adminId = String(from.id || "");
+
+  if (!isAuthorizedAdmin(adminId)) {
+    return;
+  }
+
+  const text =
+    typeof message?.text === "string"
+      ? message.text.trim()
+      : "";
+
+  if (!text) {
+    return;
+  }
+
+  const withdrawalId =
+    pendingTxidEntry.get(adminId);
+
+  if (!withdrawalId) {
+    return;
+  }
+
+  const replyTo =
+    message?.reply_to_message;
+
+  const promptText =
+    String(replyTo?.text || "");
+
+  if (
+    !replyTo ||
+    !promptText.includes("ENTER PAYMENT TXID")
+  ) {
+    return;
+  }
+
+  try {
+    if (
+      !withdrawalService ||
+      typeof withdrawalService.submitWithdrawalTxid !==
+        "function"
+    ) {
+      throw new Error(
+        "Withdrawal TXID service is unavailable."
+      );
+    }
+
+    await withdrawalService.submitWithdrawalTxid(
+      withdrawalId,
+      text,
+      from
+    );
+
+    pendingTxidEntry.delete(adminId);
+
+    await telegramApi(
+      "sendMessage",
+      {
+        chat_id:
+          message.chat?.id ||
+          TELEGRAM_CHAT_ID,
+        text: [
+          "🟡 *TXID SUBMITTED*",
+          "",
+          `🆔 *Withdrawal ID:* \`${escapeCode(withdrawalId)}\``,
+          `🔗 *TXID:* \`${escapeCode(text)}\``,
+          "",
+          "🟡 *Status: TXID SUBMITTED*",
+          "",
+          escapeMarkdown(
+            "The transaction ID has been recorded. The withdrawal is not marked COMPLETED until blockchain verification succeeds."
+          ),
+        ].join("\n"),
+        parse_mode: "MarkdownV2",
+      }
+    );
+
+    console.log(
+      `[TELEGRAM] TXID submitted for manual withdrawal ${withdrawalId} by admin ${adminId}.`
+    );
+  } catch (error) {
+    console.error(
+      `[TELEGRAM] TXID submission failed for ${withdrawalId}:`,
+      error.message
+    );
+
+    await telegramApi(
+      "sendMessage",
+      {
+        chat_id:
+          message.chat?.id ||
+          TELEGRAM_CHAT_ID,
+        text: [
+          "❌ *TXID NOT ACCEPTED*",
+          "",
+          escapeMarkdown(
+            error.message || "Could not record the TXID."
+          ),
+          "",
+          escapeMarkdown(
+            "Reply to the TXID prompt with the transaction ID after the manual payment."
+          ),
+        ].join("\n"),
+        parse_mode: "MarkdownV2",
+      }
+    );
   }
 }
 
@@ -456,6 +748,7 @@ async function pollingLoop() {
               20,
             allowed_updates: [
               "callback_query",
+              "message",
             ],
           }
         );
@@ -477,6 +770,19 @@ async function pollingLoop() {
           ).catch((error) => {
             console.error(
               "[TELEGRAM] Callback processing error:",
+              error.message
+            );
+          });
+        }
+
+        if (
+          update.message
+        ) {
+          handleTelegramMessage(
+            update.message
+          ).catch((error) => {
+            console.error(
+              "[TELEGRAM] Message processing error:",
               error.message
             );
           });
@@ -522,12 +828,13 @@ async function prepareTelegramPolling() {
 // Reconnect existing unfinished admin-review records to Telegram
 // without creating duplicate messages when the Node process restarts.
 //
-// Only these user-facing review states are pushed:
-//   UNDER_REVIEW -> APPROVE button
-//   AUDITED      -> informational audited message
+// User-facing unfinished states:
+//   UNDER_REVIEW     -> APPROVE + REJECT buttons
+//   AWAITING_PAYMENT -> ENTER TXID + REJECT
+//   TXID_SUBMITTED   -> informational/manual verification state
+//   AUDITED          -> legacy informational audited message
 //
-// RESERVED/PROCESSING are NOT pushed as new approvals because they
-// may represent older/test records that need separate reconciliation.
+// This module never sends a withdrawal through Bybit.
 // ============================================================
 
 function buildUnderReviewText(withdrawalId, data) {
@@ -593,6 +900,59 @@ async function sendAuditedRecoveryMessage(withdrawalId, data, ref) {
   );
 }
 
+function buildAwaitingPaymentText(withdrawalId, data) {
+  return [
+    "🟠 *PAYMENT REQUIRED*",
+    "",
+    `🆔 *Withdrawal ID:* \`${escapeCode(withdrawalId)}\``,
+    `👤 *User ID:* \`${escapeCode(data.userId)}\``,
+    "",
+    `💵 *Gross Amount:* \`${money(data.grossAmount)} USDT\``,
+    `💳 *Charge Fee:* \`${money(data.feeDeducted)} USDT\``,
+    `💰 *SEND TO USER:* \`${money(data.netPayout)} USDT\``,
+    "",
+    `🌐 *Network:* \`${escapeCode(data.destinationNetwork || "TRC20")}\``,
+    `🏦 *Coin:* \`${escapeCode(data.coin || "USDT")}\``,
+    `📬 *Wallet:* \`${escapeCode(data.destinationAddress)}\``,
+    "",
+    "🟠 *Status: AWAITING PAYMENT*",
+    "",
+    escapeMarkdown(
+      "Manually send the net payout, then press ENTER TXID and submit the blockchain transaction ID."
+    ),
+  ].join("\n");
+}
+
+async function sendAwaitingPaymentRecoveryMessage(withdrawalId, data, ref) {
+  const result = await telegramApi("sendMessage", {
+    chat_id: TELEGRAM_CHAT_ID,
+    text: buildAwaitingPaymentText(withdrawalId, data),
+    parse_mode: "MarkdownV2",
+    reply_markup: {
+      inline_keyboard: [[
+        {
+          text: "📋 ENTER TXID",
+          callback_data: `withdrawal:enter_txid:${withdrawalId}`,
+        },
+        {
+          text: "❌ REJECT",
+          callback_data: `withdrawal:reject:${withdrawalId}`,
+        },
+      ]],
+    },
+  });
+
+  await ref.set(
+    {
+      telegramMessageId: result.message_id,
+      telegramChatId: TELEGRAM_CHAT_ID,
+      telegramNotifiedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
 async function recoverPendingWithdrawalsToTelegram() {
   if (!isConfigured()) {
     return;
@@ -602,7 +962,7 @@ async function recoverPendingWithdrawalsToTelegram() {
 
   const snapshot = await db
     .collection("withdrawals")
-    .where("status", "in", ["UNDER_REVIEW", "AUDITED"])
+    .where("status", "in", ["UNDER_REVIEW", "AWAITING_PAYMENT", "TXID_SUBMITTED", "AUDITED"])
     .limit(100)
     .get();
 
@@ -640,6 +1000,10 @@ async function recoverPendingWithdrawalsToTelegram() {
                       text: "✅ APPROVE",
                       callback_data: `withdrawal:approve:${withdrawalId}`,
                     },
+                    {
+                      text: "❌ REJECT",
+                      callback_data: `withdrawal:reject:${withdrawalId}`,
+                    },
                   ],
                 ],
               },
@@ -662,6 +1026,10 @@ async function recoverPendingWithdrawalsToTelegram() {
                       text: "✅ APPROVE",
                       callback_data: `withdrawal:approve:${withdrawalId}`,
                     },
+                    {
+                      text: "❌ REJECT",
+                      callback_data: `withdrawal:reject:${withdrawalId}`,
+                    },
                   ],
                 ],
               },
@@ -683,6 +1051,84 @@ async function recoverPendingWithdrawalsToTelegram() {
           }
         } else {
           await notifyWithdrawalUnderReview(withdrawalId);
+        }
+
+        recovered++;
+      } else if (
+        status === "AWAITING_PAYMENT" ||
+        status === "TXID_SUBMITTED"
+      ) {
+        const text =
+          status === "TXID_SUBMITTED"
+            ? [
+                "🟡 *TXID SUBMITTED*",
+                "",
+                `🆔 *Withdrawal ID:* \`${escapeCode(withdrawalId)}\``,
+                `👤 *User ID:* \`${escapeCode(data.userId)}\``,
+                "",
+                `💰 *Payout:* \`${money(data.netPayout)} USDT\``,
+                `📬 *Wallet:* \`${escapeCode(data.destinationAddress)}\``,
+                `🔗 *TXID:* \`${escapeCode(data.txid || "")}\``,
+                "",
+                "🟡 *Status: TXID SUBMITTED*",
+                "",
+                escapeMarkdown(
+                  "Awaiting blockchain verification. Do not mark this withdrawal completed manually."
+                ),
+              ].join("\n")
+            : buildAwaitingPaymentText(withdrawalId, data);
+
+        const keyboard =
+          status === "TXID_SUBMITTED"
+            ? []
+            : [[
+                {
+                  text: "📋 ENTER TXID",
+                  callback_data: `withdrawal:enter_txid:${withdrawalId}`,
+                },
+                {
+                  text: "❌ REJECT",
+                  callback_data: `withdrawal:reject:${withdrawalId}`,
+                },
+              ]];
+
+        if (existingMessageId > 0 && existingChatId) {
+          try {
+            await telegramApi("editMessageText", {
+              chat_id: existingChatId,
+              message_id: existingMessageId,
+              text,
+              parse_mode: "MarkdownV2",
+              reply_markup: {
+                inline_keyboard: keyboard,
+              },
+            });
+          } catch (editError) {
+            const result = await telegramApi("sendMessage", {
+              chat_id: TELEGRAM_CHAT_ID,
+              text,
+              parse_mode: "MarkdownV2",
+              reply_markup: {
+                inline_keyboard: keyboard,
+              },
+            });
+
+            await ref.set(
+              {
+                telegramMessageId: result.message_id,
+                telegramChatId: TELEGRAM_CHAT_ID,
+                telegramNotifiedAt: FieldValue.serverTimestamp(),
+                updatedAt: FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            );
+          }
+        } else {
+          await sendAwaitingPaymentRecoveryMessage(
+            withdrawalId,
+            data,
+            ref
+          );
         }
 
         recovered++;
@@ -779,6 +1225,7 @@ module.exports = {
   notifyWithdrawalUnderReview,
   recoverPendingWithdrawalsToTelegram,
   approveWithdrawal,
+  rejectWithdrawal,
   startTelegramWithdrawalApproval,
   stopTelegramWithdrawalApproval,
 };

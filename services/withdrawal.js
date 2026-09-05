@@ -11,16 +11,14 @@
 // - No Firebase initialization here.
 // - No UID hardcoding.
 // - UID always comes from Firebase authentication.
-// - User funds are reserved before Bybit submission.
-// - Failed submissions restore the reserved funds.
-// - Failed Bybit withdrawals are automatically refunded.
+// - User funds are reserved before manual payout approval.
+// - Rejected/failed manual payouts restore the reserved funds.
+// - Refunds are protected against double-crediting.
 // ============================================================
 
 require("dotenv").config();
 
-const crypto = require("crypto");
 const bcrypt = require("bcrypt");
-const { RestClientV5 } = require("bybit-api");
 
 const {
   getFirestore,
@@ -149,6 +147,19 @@ const WITHDRAW_MAXIMUM =
     100000
   );
 
+// Authorized manual payout sender.
+// This is the Saint Crypto/Bybit wallet used to send user withdrawals.
+// The withdrawal verifier compares the actual TRON transaction sender
+// against this address before marking a withdrawal COMPLETED.
+const AUTHORIZED_PAYOUT_WALLET =
+  String(
+    env(
+      "AUTHORIZED_PAYOUT_WALLET",
+      "WITHDRAWAL_PAYOUT_WALLET"
+    ) ||
+      "TKeND3TnF2L1J7LUjatwrGoxLXP9AH5wZw"
+  ).trim();
+
 // ============================================================
 // MASTER WITHDRAWAL FEE
 //
@@ -158,133 +169,6 @@ const WITHDRAW_MAXIMUM =
 // ============================================================
 
 const WITHDRAW_FEE_PERCENT = 5;
-
-// ============================================================
-// BYBIT CONFIGURATION
-// ============================================================
-
-const BYBIT_API_KEY =
-  env("BYBIT_API_KEY");
-
-const BYBIT_API_SECRET =
-  env("BYBIT_API_SECRET");
-
-const BYBIT_TESTNET =
-  String(
-    process.env.BYBIT_TESTNET ||
-      "false"
-  ).toLowerCase() ===
-  "true";
-
-const BYBIT_RECV_WINDOW =
-  int(
-    process.env.BYBIT_RECV_WINDOW,
-    10000
-  );
-
-const BYBIT_TIMEOUT_MS =
-  int(
-    process.env.BYBIT_TIMEOUT_MS,
-    30000
-  );
-
-const BYBIT_RETRY_ATTEMPTS =
-  Math.max(
-    1,
-    int(
-      process.env.BYBIT_RETRY_ATTEMPTS,
-      3
-    )
-  );
-
-const BYBIT_RETRY_DELAY =
-  Math.max(
-    1,
-    int(
-      process.env.BYBIT_RETRY_DELAY,
-      2
-    )
-  );
-
-// ============================================================
-// BYBIT CLIENT
-// ============================================================
-
-const bybitClient =
-  new RestClientV5({
-    key:
-      BYBIT_API_KEY,
-
-    secret:
-      BYBIT_API_SECRET,
-
-    testnet:
-      BYBIT_TESTNET,
-
-    recv_window:
-      BYBIT_RECV_WINDOW,
-  });
-
-// ============================================================
-// BYBIT REQUEST WRAPPER
-// ============================================================
-
-async function bybitRequest(
-  operation,
-  label
-) {
-  let lastError = null;
-
-  for (
-    let attempt = 1;
-    attempt <=
-      BYBIT_RETRY_ATTEMPTS;
-    attempt++
-  ) {
-    try {
-      return await Promise.race([
-        operation(),
-
-        new Promise(
-          (_, reject) => {
-            setTimeout(
-              () =>
-                reject(
-                  new Error(
-                    `${label} timed out after ${BYBIT_TIMEOUT_MS}ms.`
-                  )
-                ),
-              BYBIT_TIMEOUT_MS
-            );
-          }
-        ),
-      ]);
-    } catch (error) {
-      lastError = error;
-
-      console.warn(
-        `⚠️ ${label} attempt ${attempt}/${BYBIT_RETRY_ATTEMPTS}: ${error.message}`
-      );
-
-      if (
-        attempt <
-        BYBIT_RETRY_ATTEMPTS
-      ) {
-        await sleep(
-          BYBIT_RETRY_DELAY *
-            1000
-        );
-      }
-    }
-  }
-
-  throw (
-    lastError ||
-    new Error(
-      `${label} failed.`
-    )
-  );
-}
 
 // ============================================================
 // TRON ADDRESS VALIDATION
@@ -541,6 +425,15 @@ async function reserveWithdrawal(
           destinationAddress:
             withdrawalWallet,
 
+          // Snapshot the user's username for admin withdrawal handling.
+          // UID remains the authoritative user identity.
+          username:
+            String(
+              user.username ||
+                user.displayName ||
+                ""
+            ).trim(),
+
           destinationNetwork:
             "TRC20",
 
@@ -618,7 +511,7 @@ async function reserveWithdrawal(
             "USDT",
 
           source:
-            "BYBIT_WITHDRAWAL",
+            "MANUAL_USDT_WITHDRAWAL",
 
           withdrawalId:
             withdrawalRef.id,
@@ -820,7 +713,7 @@ async function restoreWithdrawal(
             "USDT",
 
           source:
-            "BYBIT_WITHDRAWAL_FAILURE",
+            "MANUAL_WITHDRAWAL_FAILURE",
 
           withdrawalId,
 
@@ -837,549 +730,715 @@ async function restoreWithdrawal(
 }
 
 // ============================================================
-// RESOLVE THE EXACT BYBIT CHAIN IDENTIFIER
+// MANUAL WITHDRAWAL PAYMENT WORKFLOW
 //
-// Bybit exposes both `chain` and `chainType`. The withdrawal API
-// requires the exact `chain` value. We therefore resolve it from
-// Bybit instead of assuming that TRC20/TRX are interchangeable.
+// Saint Crypto no longer submits user withdrawals to Bybit.
+// APPROVE only moves the withdrawal to AWAITING_PAYMENT.
+// The admin manually sends the netPayout to the user's locked
+// TRON wallet, then submits the blockchain TXID.
 // ============================================================
 
-async function resolveBybitWithdrawalChain() {
-  const configured = String(WITHDRAW_CHAIN || "TRX")
-    .trim()
-    .toUpperCase();
+async function approveAndSubmitWithdrawal(withdrawalId, telegramUser = {}) {
+  if (!firestore) throw new Error("Database service is unavailable.");
 
-  const response = await bybitRequest(
-    () => bybitClient.getCoinInfo(WITHDRAW_COIN),
-    "Bybit coin information"
-  );
+  const withdrawalRef = firestore.collection("withdrawals").doc(withdrawalId);
+  let result = null;
 
-  if (!response || response.retCode !== 0) {
-    throw new Error(
-      response?.retMsg ||
-        `Unable to read Bybit ${WITHDRAW_COIN} chain information.`
-    );
-  }
+  await firestore.runTransaction(async (transaction) => {
+    const doc = await transaction.get(withdrawalRef);
+    if (!doc.exists) throw new Error("Withdrawal record not found.");
+    const data = doc.data() || {};
 
-  const rows = Array.isArray(response.result?.rows)
-    ? response.result.rows
-    : [];
+    if (String(data.status || "").toUpperCase() !== "UNDER_REVIEW") {
+      throw new Error(`This withdrawal is already ${String(data.status || "UNKNOWN").toUpperCase()}.`);
+    }
 
-  const coinRow = rows.find(
-    (row) =>
-      String(row?.coin || "").toUpperCase() ===
-      WITHDRAW_COIN.toUpperCase()
-  );
+    const userId = String(data.userId || "").trim();
+    if (!userId) throw new Error("Withdrawal has no associated user.");
 
-  const chains = Array.isArray(coinRow?.chains)
-    ? coinRow.chains
-    : [];
+    const userRef = firestore.collection("users").doc(userId);
+    const userDoc = await transaction.get(userRef);
+    if (!userDoc.exists) throw new Error("User account could not be found.");
+    const user = userDoc.data() || {};
 
-  if (!chains.length) {
-    throw new Error(
-      `Bybit returned no withdrawal chains for ${WITHDRAW_COIN}.`
-    );
-  }
+    if (user.is_frozen === true || user.status === "FROZEN") {
+      throw new Error("The user's account is currently restricted.");
+    }
 
-  const aliases = new Set([
-    configured,
-    configured === "TRC20" ? "TRX" : configured,
-    configured === "TRX" ? "TRC20" : configured,
-  ]);
+    const lockedAddress = String(user.withdrawal_wallet_address || "").trim();
+    if (user.withdrawal_wallet_locked !== true || !validTron(lockedAddress)) {
+      throw new Error("The user's locked withdrawal wallet is missing or invalid.");
+    }
 
-  const match = chains.find((chain) => {
-    const chainValue = String(chain?.chain || "")
-      .trim()
-      .toUpperCase();
-    const chainType = String(chain?.chainType || "")
-      .trim()
-      .toUpperCase();
+    if (String(data.destinationAddress || "").trim() !== lockedAddress) {
+      throw new Error("Withdrawal wallet does not match the user's locked wallet.");
+    }
 
-    return aliases.has(chainValue) || aliases.has(chainType);
+    transaction.set(withdrawalRef, {
+      status: "AWAITING_PAYMENT",
+      approvalStatus: "APPROVED",
+      approvedAt: FieldValue.serverTimestamp(),
+      approvedByTelegramUserId: String(telegramUser.id || ""),
+      approvedByTelegramUsername: String(telegramUser.username || ""),
+      paymentNetwork: "TRC20",
+      paymentCoin: "USDT",
+      paymentAddress: lockedAddress,
+      paymentAmount: Number(data.netPayout || 0),
+      paymentRequired: true,
+      txid: "",
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    result = {
+      success: true,
+      status: "AWAITING_PAYMENT",
+      withdrawalId,
+      grossAmount: Number(data.grossAmount || 0),
+      feeDeducted: Number(data.feeDeducted || 0),
+      feePercent: Number(data.feePercent || WITHDRAW_FEE_PERCENT),
+      netPayout: Number(data.netPayout || 0),
+      destinationAddress: lockedAddress,
+      destinationNetwork: "TRC20",
+    };
   });
 
-  if (!match) {
-    const available = chains
-      .map((chain) =>
-        `${chain?.chain || "?"} (${chain?.chainType || "?"})`
-      )
-      .join(", ");
-
-    throw new Error(
-      `Withdrawal chain ${configured} is not available for ${WITHDRAW_COIN} on Bybit. Available chains: ${available}.`
-    );
-  }
-
-  if (String(match.chainWithdraw) === "0") {
-    throw new Error(
-      `Bybit has temporarily suspended ${WITHDRAW_COIN} withdrawals on ${match.chain || match.chainType}.`
-    );
-  }
-
-  const exactChain = String(match.chain || "").trim();
-
-  if (!exactChain) {
-    throw new Error(
-      `Bybit did not provide a valid withdrawal chain identifier for ${WITHDRAW_COIN}.`
-    );
-  }
-
-  console.log(
-    `[WITHDRAWAL] Bybit chain resolved: configured=${configured}, chain=${exactChain}, chainType=${match.chainType || ""}`
-  );
-
-  return {
-    chain: exactChain,
-    chainType: String(match.chainType || ""),
-    withdrawMin: Number(match.withdrawMin || 0),
-    withdrawFee: String(match.withdrawFee || ""),
-  };
+  console.log(`[WITHDRAWAL] Approved for manual payment: ${withdrawalId} send=${result.netPayout} USDT to ${result.destinationAddress}`);
+  return result;
 }
 
-// ============================================================
-// RESOLVE DESTINATION FROM BYBIT ADDRESS BOOK
-//
-// Bybit requires an exact address-book match for on-chain
-// withdrawals when forceChain is 0 or 1.
-// This check happens BEFORE reserving user funds.
-// ============================================================
+const approveManualWithdrawal = approveAndSubmitWithdrawal;
 
-async function resolveBybitDestination(address) {
-  const chainInfo =
-    await resolveBybitWithdrawalChain();
-
-  const response =
-    await bybitRequest(
-      () =>
-        bybitClient.getWithdrawalAddressList({
-          coin: WITHDRAW_COIN,
-          chain: chainInfo.chain,
-          limit: 100,
-        }),
-      "Bybit withdrawal address book"
-    );
-
-  if (!response || response.retCode !== 0) {
-    const error = new Error(
-      response?.retMsg ||
-        "Unable to check the Bybit withdrawal address book."
-    );
-    error.bybitRetCode = response?.retCode;
-    throw error;
+async function rejectWithdrawal(withdrawalId, reason = "Withdrawal rejected by administrator.") {
+  if (!firestore) throw new Error("Database service is unavailable.");
+  const withdrawalRef = firestore.collection("withdrawals").doc(withdrawalId);
+  const snapshot = await withdrawalRef.get();
+  if (!snapshot.exists) throw new Error("Withdrawal record not found.");
+  const data = snapshot.data() || {};
+  const status = String(data.status || "").toUpperCase();
+  if (status !== "UNDER_REVIEW" && status !== "AWAITING_PAYMENT") {
+    throw new Error(`This withdrawal is already ${status || "UNKNOWN"}.`);
   }
-
-  const rows = Array.isArray(response.result?.rows)
-    ? response.result.rows
-    : [];
-
-  // Bybit address matching is case-sensitive.
-  const match = rows.find(
-    (row) =>
-      String(row?.address || "") === address &&
-      String(row?.chain || "").toUpperCase() ===
-        chainInfo.chain.toUpperCase()
-  );
-
-  if (!match) {
-    const error = new Error(
-      `This withdrawal address is not registered in your Bybit address book for ${chainInfo.chain}. Add the exact address with the ${chainInfo.chainType || chainInfo.chain} network in Bybit first.`
-    );
-    error.code = "ADDRESS_NOT_IN_BYBIT_BOOK";
-    error.bybitRetCode = 131002;
-    throw error;
-  }
-
-  const tag =
-    String(match.tag || "").trim();
-
-  console.log(
-    `[WITHDRAWAL] Bybit address-book match: address=${address}, chain=${match.chain}, tag=${tag ? "present" : "none"}`
-  );
-
-  return {
-    address: String(match.address),
-    chain: String(match.chain),
-    chainType: String(match.chainType || chainInfo.chainType || ""),
-    tag: tag || null,
-    withdrawMin: chainInfo.withdrawMin,
-    withdrawFee: chainInfo.withdrawFee,
-  };
+  await restoreWithdrawal(withdrawalId, reason);
+  return { success: true, status: "FAILED", withdrawalId, reason };
 }
 
-// ============================================================
-// SUBMIT WITHDRAWAL TO BYBIT
-// ============================================================
-
-async function submitBybitWithdrawal(
-  destination,
-  amount,
-  requestId
-) {
-  if (
-    !BYBIT_API_KEY ||
-    !BYBIT_API_SECRET
-  ) {
-    throw new Error(
-      "Bybit withdrawal credentials are not configured."
-    );
-  }
-
-  const chainInfo = destination;
-
-  const numericAmount =
-    Number(amount);
-
-  if (
-    Number.isFinite(chainInfo.withdrawMin) &&
-    chainInfo.withdrawMin > 0 &&
-    numericAmount < chainInfo.withdrawMin
-  ) {
-    throw new Error(
-      `Bybit minimum withdrawal for ${WITHDRAW_COIN} on ${chainInfo.chain} is ${chainInfo.withdrawMin} USDT.`
-    );
-  }
-
-  console.log(
-    `[WITHDRAWAL] Submitting to Bybit: coin=${WITHDRAW_COIN}, chain=${chainInfo.chain}, amount=${numericAmount}, forceChain=1`
-  );
-
-  const response =
-    await bybitRequest(
-      () =>
-        bybitClient.submitWithdrawal(
-          {
-            coin:
-              WITHDRAW_COIN,
-
-            // Use the exact chain/address returned by Bybit.
-            chain:
-              chainInfo.chain,
-
-            address:
-              chainInfo.address,
-
-            // Only send tag when the address-book entry has one.
-            ...(chainInfo.tag
-              ? { tag: chainInfo.tag }
-              : {}),
-
-            amount:
-              String(numericAmount),
-
-            timestamp:
-              Date.now(),
-
-            forceChain:
-              1,
-
-            accountType:
-              WITHDRAW_ACCOUNT_TYPE,
-
-            requestId,
-
-            // Saint Crypto already calculates its own 5% fee.
-            // The amount sent here is the net payout.
-            feeType:
-              0,
-          }
-        ),
-
-      "Bybit withdrawal request"
-    );
-
-  if (
-    !response ||
-    response.retCode !== 0
-  ) {
-    const error =
-      new Error(
-        response?.retMsg ||
-          "Bybit rejected the withdrawal."
-      );
-
-    error.bybitRetCode =
-      response?.retCode;
-
-    throw error;
-  }
-
-  if (
-    !response.result?.id
-  ) {
-    throw new Error(
-      "Bybit did not return a withdrawal ID."
-    );
-  }
-
-  return {
-    withdrawalId:
-      response.result.id,
-
-    chain:
-      chainInfo.chain,
-
-    chainType:
-      chainInfo.chainType,
-
-    response,
-  };
+function normalizeTxid(value) {
+  return String(value || "").trim();
 }
 
+const TRON_GRID_BASE_URL =
+  (env("TRONGRID_BASE_URL") || "https://api.trongrid.io").replace(/\/$/, "");
 
-// ============================================================
-// ADMIN APPROVAL -> IMMEDIATE BYBIT SUBMISSION
-//
-// Telegram APPROVE is the only approval step.
-// The user never confirms again.
-// ============================================================
+const TRONGRID_API_KEY = env("TRONGRID_API_KEY");
 
-async function approveAndSubmitWithdrawal(
-  withdrawalId,
-  telegramUser = {}
-) {
-  if (!firestore) {
-    throw new Error("Database service is unavailable.");
+// Mainnet Tether USD (USDT) TRC-20 contract.
+const USDT_TRC20_CONTRACT =
+  env("USDT_TRC20_CONTRACT") ||
+  "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
+
+const USDT_TRC20_CONTRACT_HEX =
+  "41a614f803b6fd780986a42c78ec9c7f77e6ded13c";
+
+const USDT_DECIMALS = 6;
+const TRC20_TRANSFER_SELECTOR = "a9059cbb";
+
+function tronBase58Decode(address) {
+  const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  let value = 0n;
+
+  for (const char of String(address || "")) {
+    const index = alphabet.indexOf(char);
+    if (index < 0) throw new Error("Invalid TRON address.");
+    value = value * 58n + BigInt(index);
   }
 
-  const withdrawalRef =
-    firestore.collection("withdrawals").doc(withdrawalId);
+  let hex = value.toString(16);
+  if (hex.length % 2 !== 0) hex = `0${hex}`;
 
-  const initialSnapshot =
-    await withdrawalRef.get();
-
-  if (!initialSnapshot.exists) {
-    throw new Error("Withdrawal record not found.");
+  let leadingZeros = 0;
+  for (const char of String(address || "")) {
+    if (char !== "1") break;
+    leadingZeros++;
   }
 
-  const current =
-    initialSnapshot.data() || {};
+  return Buffer.concat([
+    Buffer.alloc(leadingZeros),
+    Buffer.from(hex, "hex"),
+  ]);
+}
 
-  if (
-    String(current.status || "").toUpperCase() !==
-    "UNDER_REVIEW"
-  ) {
-    throw new Error(
-      `This withdrawal is already ${String(current.status || "UNKNOWN").toUpperCase()}.`
-    );
+function normalizeTronHex(value) {
+  const raw = String(value || "").toLowerCase().replace(/^0x/, "");
+  return raw.startsWith("41") ? raw : `41${raw}`;
+}
+
+function tronAddressToHex(address) {
+  const decoded = tronBase58Decode(String(address || "").trim());
+  if (decoded.length !== 25) throw new Error("Invalid TRON address length.");
+
+  const payload = decoded.subarray(0, 21);
+  const checksum = decoded.subarray(21, 25);
+  const first = require("crypto").createHash("sha256").update(payload).digest();
+  const second = require("crypto").createHash("sha256").update(first).digest();
+  if (!second.subarray(0, 4).equals(checksum)) {
+    throw new Error("Invalid TRON address checksum.");
   }
 
-  const userId =
-    String(current.userId || "").trim();
+  return payload.toString("hex");
+}
 
-  if (!userId) {
-    throw new Error("Withdrawal has no associated user.");
+function decimalToUnits(value, decimals = USDT_DECIMALS) {
+  const text = Number(value).toFixed(decimals);
+  const [whole, fraction = ""] = text.split(".");
+  return BigInt(`${whole}${fraction.padEnd(decimals, "0").slice(0, decimals)}`);
+}
+
+async function tronGridPost(path, body) {
+  const headers = {
+    "Content-Type": "application/json",
+  };
+
+  if (TRONGRID_API_KEY) {
+    headers["TRON-PRO-API-KEY"] = TRONGRID_API_KEY;
   }
 
-  const userRef =
-    firestore.collection("users").doc(userId);
-
-  const userDoc =
-    await userRef.get();
-
-  if (!userDoc.exists) {
-    throw new Error("User account could not be found.");
-  }
-
-  const user =
-    userDoc.data() || {};
-
-  if (
-    user.is_frozen === true ||
-    user.status === "FROZEN"
-  ) {
-    throw new Error("The user's account is currently restricted.");
-  }
-
-  const lockedAddress =
-    String(
-      user.withdrawal_wallet_address ||
-        ""
-    ).trim();
-
-  if (
-    user.withdrawal_wallet_locked !== true ||
-    !validTron(lockedAddress)
-  ) {
-    throw new Error(
-      "The user's locked withdrawal wallet is missing or invalid."
-    );
-  }
-
-  if (
-    String(current.destinationAddress || "").trim() !==
-    lockedAddress
-  ) {
-    throw new Error(
-      "Withdrawal wallet does not match the user's locked wallet."
-    );
-  }
-
-  // This is intentionally checked only at admin approval time.
-  // A normal user withdrawal request never contacts Bybit.
-  const destination =
-    await resolveBybitDestination(lockedAddress);
-
-  const requestId =
-    String(
-      current.bybitRequestId ||
-        crypto.randomBytes(12).toString("hex")
-    );
-
-  // Claim atomically. A second Telegram click cannot submit
-  // the same withdrawal.
-  await firestore.runTransaction(
-    async (transaction) => {
-      const doc =
-        await transaction.get(withdrawalRef);
-
-      if (!doc.exists) {
-        throw new Error("Withdrawal record not found.");
-      }
-
-      const data =
-        doc.data() || {};
-
-      if (
-        String(data.status || "").toUpperCase() !==
-        "UNDER_REVIEW"
-      ) {
-        throw new Error(
-          `This withdrawal is already ${String(data.status || "UNKNOWN").toUpperCase()}.`
-        );
-      }
-
-      transaction.set(
-        withdrawalRef,
-        {
-          status: "SUBMITTING",
-          approvalStatus: "APPROVED",
-          approvedAt:
-            FieldValue.serverTimestamp(),
-          approvedByTelegramUserId:
-            String(telegramUser.id || ""),
-          approvedByTelegramUsername:
-            String(telegramUser.username || ""),
-          bybitRequestId: requestId,
-          submissionStartedAt:
-            FieldValue.serverTimestamp(),
-          updatedAt:
-            FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
+  const response = await fetch(
+    `${TRON_GRID_BASE_URL}${path}`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
     }
   );
 
+  let data = null;
   try {
-    const result =
-      await submitBybitWithdrawal(
-        destination,
-        Number(current.netPayout || 0),
-        requestId
-      );
+    data = await response.json();
+  } catch (_) {
+    data = null;
+  }
 
-    await withdrawalRef.set(
+  if (!response.ok) {
+    throw new Error(
+      `TRON API ${path} returned HTTP ${response.status}.`
+    );
+  }
+
+  return data || {};
+}
+
+function getTriggerSmartContract(txBody) {
+  const contracts =
+    txBody?.raw_data?.contract || [];
+
+  if (!Array.isArray(contracts) || contracts.length !== 1) {
+    return null;
+  }
+
+  const contract = contracts[0];
+  if (contract?.type !== "TriggerSmartContract") {
+    return null;
+  }
+
+  return contract;
+}
+
+function decodeTrc20Transfer(contract) {
+  const value = contract?.parameter?.value || {};
+  const data = String(value.data || "").toLowerCase();
+
+  if (
+    !data.startsWith(TRC20_TRANSFER_SELECTOR) ||
+    data.length < 8 + 64 + 64
+  ) {
+    return null;
+  }
+
+  const recipientWord = data.slice(8, 72);
+  const amountWord = data.slice(72, 136);
+
+  if (!/^[0-9a-f]{64}$/.test(recipientWord)) return null;
+  if (!/^[0-9a-f]{64}$/.test(amountWord)) return null;
+
+  const recipientHex = `41${recipientWord.slice(-40)}`;
+  const amountUnits = BigInt(`0x${amountWord}`);
+
+  return {
+    recipientHex,
+    amountUnits,
+  };
+}
+
+async function fetchTronWithdrawalTransaction(txid) {
+  const transaction = await tronGridPost(
+    "/wallet/gettransactionbyid",
+    { value: txid }
+  );
+
+  const receipt = await tronGridPost(
+    "/walletsolidity/gettransactioninfobyid",
+    { value: txid }
+  );
+
+  return { transaction, receipt };
+}
+
+async function verifyWithdrawalTxid(
+  withdrawalId,
+  txid,
+  telegramUser = {}
+) {
+  if (!firestore) throw new Error("Database service is unavailable.");
+
+  const normalizedTxid = normalizeTxid(txid);
+  if (!/^[A-Fa-f0-9]{64}$/.test(normalizedTxid)) {
+    throw new Error("The TRON TXID must be a 64-character hexadecimal transaction ID.");
+  }
+
+  const withdrawalRef = firestore.collection("withdrawals").doc(withdrawalId);
+  const snapshot = await withdrawalRef.get();
+  if (!snapshot.exists) throw new Error("Withdrawal record not found.");
+
+  const data = snapshot.data() || {};
+  const status = String(data.status || "").toUpperCase();
+
+  if (status !== "TXID_SUBMITTED") {
+    throw new Error(
+      `TXID verification requires TXID_SUBMITTED status, not ${status || "UNKNOWN"}.`
+    );
+  }
+
+  const destinationAddress = String(
+    data.paymentAddress || data.destinationAddress || ""
+  ).trim();
+
+  if (!validTron(destinationAddress)) {
+    throw new Error("The withdrawal destination wallet is invalid.");
+  }
+
+  const expectedRecipientHex = tronAddressToHex(destinationAddress);
+  const expectedAmountUnits = decimalToUnits(
+    Number(data.paymentAmount ?? data.netPayout ?? 0),
+    USDT_DECIMALS
+  );
+
+  const { transaction, receipt } =
+    await fetchTronWithdrawalTransaction(normalizedTxid);
+
+  if (!transaction || !transaction.raw_data) {
+    return {
+      success: false,
+      verified: false,
+      pending: true,
+      reason: "TRON has not indexed this transaction yet.",
+      withdrawalId,
+      txid: normalizedTxid,
+    };
+  }
+
+  const triggerContract = getTriggerSmartContract(transaction);
+  if (!triggerContract) {
+    return {
+      success: false,
+      verified: false,
+      pending: false,
+      reason: "TXID is not a TRC-20 smart-contract transaction.",
+      withdrawalId,
+      txid: normalizedTxid,
+    };
+  }
+
+  const actualContractHex = normalizeTronHex(
+    triggerContract?.parameter?.value?.contract_address || ""
+  );
+
+  const expectedContractHex =
+    normalizeTronHex(USDT_TRC20_CONTRACT_HEX);
+
+  if (actualContractHex !== expectedContractHex) {
+    return {
+      success: false,
+      verified: false,
+      pending: false,
+      reason: `TXID uses a different TRC-20 contract. Expected USDT contract ${USDT_TRC20_CONTRACT}.`,
+      withdrawalId,
+      txid: normalizedTxid,
+    };
+  }
+
+  // ------------------------------------------------------------
+  // SECURITY: the payout TXID must be sent FROM the authorized
+  // Saint Crypto/Bybit payout wallet. Checking only the recipient
+  // would allow an unrelated third party to fund the user's wallet
+  // and falsely complete the withdrawal.
+  // ------------------------------------------------------------
+  const actualSenderHex = normalizeTronHex(
+    triggerContract?.parameter?.value?.owner_address || ""
+  );
+
+  if (!validTron(AUTHORIZED_PAYOUT_WALLET)) {
+    throw new Error(
+      "The authorized payout wallet is not configured with a valid TRON address."
+    );
+  }
+
+  const expectedSenderHex = tronAddressToHex(
+    AUTHORIZED_PAYOUT_WALLET
+  );
+
+  if (actualSenderHex !== expectedSenderHex) {
+    return {
+      success: false,
+      verified: false,
+      pending: false,
+      reason:
+        "The TXID sender does not match the authorized Saint Crypto payout wallet.",
+      withdrawalId,
+      txid: normalizedTxid,
+    };
+  }
+
+  const decoded = decodeTrc20Transfer(triggerContract);
+  if (!decoded) {
+    return {
+      success: false,
+      verified: false,
+      pending: false,
+      reason: "TXID does not contain a valid TRC-20 USDT transfer.",
+      withdrawalId,
+      txid: normalizedTxid,
+    };
+  }
+
+  if (decoded.recipientHex !== expectedRecipientHex) {
+    return {
+      success: false,
+      verified: false,
+      pending: false,
+      reason: "The TXID recipient does not match the user's locked withdrawal wallet.",
+      withdrawalId,
+      txid: normalizedTxid,
+    };
+  }
+
+  if (decoded.amountUnits < expectedAmountUnits) {
+    return {
+      success: false,
+      verified: false,
+      pending: false,
+      reason: "The verified USDT amount is less than the required net payout.",
+      withdrawalId,
+      txid: normalizedTxid,
+    };
+  }
+
+  const receiptResult = String(
+    receipt?.receipt?.result || ""
+  ).toUpperCase();
+
+  if (!receipt || !receipt.blockNumber || receiptResult !== "SUCCESS") {
+    return {
+      success: false,
+      verified: false,
+      pending: !receipt || !receipt.blockNumber,
+      reason:
+        receiptResult && receiptResult !== "SUCCESS"
+          ? `TRON execution result is ${receiptResult}.`
+          : "TRON transaction is not yet solidified.",
+      withdrawalId,
+      txid: normalizedTxid,
+    };
+  }
+
+  let completionResult = null;
+
+  await firestore.runTransaction(async (transactionRef) => {
+    const latest = await transactionRef.get(withdrawalRef);
+    if (!latest.exists) {
+      throw new Error("Withdrawal record not found.");
+    }
+
+    const latestData = latest.data() || {};
+    const latestStatus = String(latestData.status || "").toUpperCase();
+
+    if (latestStatus === "COMPLETED") {
+      completionResult = {
+        success: true,
+        verified: true,
+        alreadyCompleted: true,
+        status: "COMPLETED",
+        withdrawalId,
+        txid: String(latestData.txid || normalizedTxid),
+      };
+      return;
+    }
+
+    if (latestStatus !== "TXID_SUBMITTED") {
+      throw new Error(
+        `Withdrawal changed state during verification: ${latestStatus || "UNKNOWN"}.`
+      );
+    }
+
+    if (String(latestData.txid || "").trim() !== normalizedTxid) {
+      throw new Error("The submitted TXID changed before verification completed.");
+    }
+
+    transactionRef.set(
+      withdrawalRef,
       {
-        status: "PROCESSING",
-        approvalStatus: "APPROVED",
-        bybitWithdrawalId:
-          result.withdrawalId,
-        bybitRequestId: requestId,
-        destinationAddress: lockedAddress,
-        destinationNetwork: "TRC20",
-        coin: WITHDRAW_COIN,
-        chain: result.chain || destination.chain,
-        chainType:
-          result.chainType || destination.chainType || "",
-        bybitSubmittedAt:
-          FieldValue.serverTimestamp(),
-        updatedAt:
-          FieldValue.serverTimestamp(),
+        status: "COMPLETED",
+        completedAt: FieldValue.serverTimestamp(),
+        completedByTelegramUserId: String(telegramUser.id || ""),
+        completedByTelegramUsername: String(telegramUser.username || ""),
+        txidVerified: true,
+        txidVerifiedAt: FieldValue.serverTimestamp(),
+        txidVerifiedBlockNumber: Number(receipt.blockNumber),
+        txidVerifiedContract: USDT_TRC20_CONTRACT,
+        txidVerifiedSender: AUTHORIZED_PAYOUT_WALLET,
+        txidVerifiedRecipient: destinationAddress,
+        txidVerifiedAmountUnits: decoded.amountUnits.toString(),
+        txidVerificationSource: "TRONGRID_SOLIDITYNODE",
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    completionResult = {
+      success: true,
+      verified: true,
+      alreadyCompleted: false,
+      status: "COMPLETED",
+      withdrawalId,
+      txid: normalizedTxid,
+      destinationAddress,
+      verifiedAmountUnits: decoded.amountUnits.toString(),
+      blockNumber: Number(receipt.blockNumber),
+    };
+  });
+
+  console.log(
+    `[WITHDRAWAL] TXID verified and withdrawal completed: ${withdrawalId} txid=${normalizedTxid}`
+  );
+
+  return completionResult;
+}
+
+async function submitWithdrawalTxid(withdrawalId, txid, telegramUser = {}) {
+  if (!firestore) throw new Error("Database service is unavailable.");
+  const normalizedTxid = normalizeTxid(txid);
+  if (!normalizedTxid) throw new Error("TXID is required.");
+  if (!/^[A-Fa-f0-9]{64}$/.test(normalizedTxid)) {
+    throw new Error("The TRON TXID must be a 64-character hexadecimal transaction ID.");
+  }
+
+  const withdrawalRef = firestore.collection("withdrawals").doc(withdrawalId);
+  const snapshot = await withdrawalRef.get();
+  if (!snapshot.exists) throw new Error("Withdrawal record not found.");
+  const data = snapshot.data() || {};
+  const status = String(data.status || "").toUpperCase();
+
+  if (status !== "AWAITING_PAYMENT" && status !== "TXID_SUBMITTED") {
+    throw new Error(
+      `TXID cannot be submitted while withdrawal is ${status || "UNKNOWN"}.`
+    );
+  }
+
+  const duplicate = await firestore
+    .collection("withdrawals")
+    .where("txid", "==", normalizedTxid)
+    .limit(2)
+    .get();
+
+  for (const doc of duplicate.docs) {
+    if (doc.id !== withdrawalId) {
+      throw new Error("This TXID has already been used for another withdrawal.");
+    }
+  }
+
+  await withdrawalRef.set(
+    {
+      status: "TXID_SUBMITTED",
+      txid: normalizedTxid,
+      txidSubmittedAt: FieldValue.serverTimestamp(),
+      txidSubmittedByTelegramUserId: String(telegramUser.id || ""),
+      txidSubmittedByTelegramUsername: String(telegramUser.username || ""),
+      txidVerificationStatus: "PENDING",
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  const verification = await verifyWithdrawalTxid(
+    withdrawalId,
+    normalizedTxid,
+    telegramUser
+  );
+
+  if (verification.verified) {
+    return verification;
+  }
+
+  await withdrawalRef.set(
+    {
+      txidVerificationStatus: verification.pending
+        ? "PENDING"
+        : "FAILED",
+      txidVerificationReason: verification.reason || "TXID verification failed.",
+      txidLastCheckedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return {
+    success: true,
+    status: "TXID_SUBMITTED",
+    withdrawalId,
+    txid: normalizedTxid,
+    netPayout: Number(data.netPayout || 0),
+    destinationAddress: String(data.destinationAddress || ""),
+    verified: false,
+    pending: Boolean(verification.pending),
+    reason: verification.reason || "TXID verification is pending.",
+  };
+}
+
+// ============================================================
+// MANUAL WITHDRAWAL MONITOR
+// No Bybit withdrawal polling.
+// TXID_SUBMITTED withdrawals are re-verified against solidified
+// TRON state until the payment is confirmed.
+// ============================================================
+
+async function processWithdrawal(doc) {
+  if (!doc) return { checked: false, completed: false, failed: false };
+
+  const withdrawal =
+    typeof doc.data === "function" ? doc.data() : doc;
+
+  const withdrawalId =
+    withdrawal.withdrawalId || doc.id;
+
+  const status = String(
+    withdrawal.status || ""
+  ).toUpperCase();
+
+  if (!withdrawalId || !["AWAITING_PAYMENT", "TXID_SUBMITTED"].includes(status)) {
+    return {
+      checked: false,
+      completed: false,
+      failed: false,
+    };
+  }
+
+  if (status === "AWAITING_PAYMENT") {
+    return {
+      checked: true,
+      completed: false,
+      failed: false,
+      awaitingPayment: true,
+      withdrawalId,
+    };
+  }
+
+  const txid = normalizeTxid(withdrawal.txid);
+  if (!txid) {
+    return {
+      checked: true,
+      completed: false,
+      failed: false,
+      awaitingVerification: true,
+      withdrawalId,
+      reason: "No TXID has been submitted.",
+    };
+  }
+
+  try {
+    const verification = await verifyWithdrawalTxid(
+      withdrawalId,
+      txid,
+      {
+        id: withdrawal.txidSubmittedByTelegramUserId || "",
+        username: withdrawal.txidSubmittedByTelegramUsername || "",
+      }
+    );
+
+    await firestore.collection("withdrawals").doc(withdrawalId).set(
+      {
+        txidVerificationStatus: verification.verified
+          ? "VERIFIED"
+          : verification.pending
+            ? "PENDING"
+            : "FAILED",
+        txidVerificationReason: verification.reason || "",
+        txidLastCheckedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
 
     return {
-      success: true,
-      status: "PROCESSING",
+      checked: true,
+      completed: verification.verified === true,
+      failed: false,
+      awaitingVerification: verification.verified !== true,
       withdrawalId,
-      bybitWithdrawalId:
-        result.withdrawalId,
-      grossAmount:
-        Number(current.grossAmount || 0),
-      feeDeducted:
-        Number(current.feeDeducted || 0),
-      netPayout:
-        Number(current.netPayout || 0),
-      destinationAddress:
-        lockedAddress,
+      reason: verification.reason || "",
     };
   } catch (error) {
-    await restoreWithdrawal(
-      withdrawalId,
+    console.error(
+      `[WITHDRAWAL] TXID verification error for ${withdrawalId}:`,
       error.message
     );
 
-    throw new Error(
-      `Bybit withdrawal submission failed. ${error.message}`
-    );
+    return {
+      checked: true,
+      completed: false,
+      failed: false,
+      awaitingVerification: true,
+      withdrawalId,
+      reason: error.message,
+    };
   }
 }
 
-// ============================================================
-// GET BYBIT WITHDRAWAL STATUS
-// ============================================================
+let monitorRunning = false;
+async function monitorPendingWithdrawals() {
+  if (monitorRunning || !firestore) return { checked: 0, updated: 0, completed: 0, failed: 0 };
+  monitorRunning = true;
+  const summary = { checked: 0, updated: 0, completed: 0, failed: 0 };
+  try {
+    const snapshot = await firestore.collection("withdrawals").where("status", "in", ["AWAITING_PAYMENT", "TXID_SUBMITTED"]).limit(50).get();
+    for (const doc of snapshot.docs) {
+      const result = await processWithdrawal(doc);
+      if (result?.checked) summary.checked++;
+    }
+    return summary;
+  } catch (error) {
+    console.error("❌ Manual withdrawal monitor:", error.message);
+    return { ...summary, error: error.message };
+  } finally { monitorRunning = false; }
+}
 
-async function getBybitWithdrawal(
-  withdrawalId
-) {
-  const response =
-    await bybitRequest(
-      () =>
-        bybitClient.getWithdrawalRecords(
-          {
-            coin:
-              WITHDRAW_COIN,
-
-            withdrawType:
-              0,
-
-            withdrawID:
-              withdrawalId,
-
-            limit:
-              50,
-          }
-        ),
-
-      "Bybit withdrawal status"
-    );
-
-  if (
-    !response ||
-    response.retCode !== 0
-  ) {
-    throw new Error(
-      response?.retMsg ||
-        "Unable to query Bybit withdrawal status."
-    );
-  }
-
-  const rows =
-    response.result?.rows ||
-    [];
-
-  return (
-    rows.find(
-      (row) =>
-        String(
-          row.withdrawId
-        ) ===
-        String(
-          withdrawalId
-        )
-    ) || null
-  );
+const monitorWithdrawals = monitorPendingWithdrawals;
+let monitorTimer = null;
+function startMonitor(intervalMinutes = 1) {
+  const minutes = Number(intervalMinutes);
+  const intervalMs = Number.isFinite(minutes) && minutes > 0 ? minutes * 60 * 1000 : 60 * 1000;
+  if (monitorTimer) return monitorTimer;
+  console.log(`⏰ Manual withdrawal monitor: every ${intervalMs / 60000} minute(s).`);
+  monitorPendingWithdrawals().then(s => console.log("💸 Manual withdrawal monitor:", s)).catch(e => console.error("❌ Initial manual withdrawal monitor failed:", e.message));
+  monitorTimer = setInterval(async () => {
+    try { console.log("💸 Manual withdrawal monitor:", await monitorPendingWithdrawals()); }
+    catch (error) { console.error("❌ Manual withdrawal monitor interval failed:", error.message); }
+  }, intervalMs);
+  return monitorTimer;
+}
+function stopMonitor() {
+  if (!monitorTimer) return;
+  clearInterval(monitorTimer);
+  monitorTimer = null;
+  console.log("🛑 Manual withdrawal monitor stopped.");
 }
 
 // ============================================================
@@ -1601,428 +1660,6 @@ async function requestWithdrawal(
 }
 
 // ============================================================
-// 14. PROCESS ONE WITHDRAWAL
-//
-// Called by the automatic monitor.
-// ============================================================
-
-async function processWithdrawal(
-  doc
-) {
-  if (!doc) {
-    return {
-      checked: false,
-      completed: false,
-      failed: false,
-    };
-  }
-
-  const withdrawal =
-    typeof doc.data ===
-      "function"
-      ? doc.data()
-      : doc;
-
-  const withdrawalId =
-    withdrawal.withdrawalId ||
-    doc.id;
-
-  if (
-    !withdrawalId
-  ) {
-    return {
-      checked: false,
-      completed: false,
-      failed: false,
-    };
-  }
-
-  if (
-    withdrawal.status !==
-    "PROCESSING"
-  ) {
-    return {
-      checked: false,
-      completed: false,
-      failed: false,
-    };
-  }
-
-  const bybitWithdrawalId =
-    withdrawal.bybitWithdrawalId;
-
-  if (
-    !bybitWithdrawalId
-  ) {
-    return {
-      checked: true,
-      completed: false,
-      failed: false,
-      error:
-        "Bybit withdrawal ID is missing.",
-    };
-  }
-
-  try {
-    // ----------------------------------------------------------
-    // Ask Bybit for current withdrawal status.
-    // ----------------------------------------------------------
-
-    const status =
-      await getBybitWithdrawal(
-        bybitWithdrawalId
-      );
-
-    if (!status) {
-      return {
-        checked: true,
-        completed: false,
-        failed: false,
-      };
-    }
-
-    const bybitStatus =
-      String(
-        status.status ||
-          ""
-      ).toLowerCase();
-
-    const txid =
-      status.txID ||
-      status.txid ||
-      "";
-
-    // ----------------------------------------------------------
-    // SUCCESS / COMPLETED
-    // ----------------------------------------------------------
-
-    const completedStatuses = [
-      "success",
-      "completed",
-      "complete",
-      "finished",
-    ];
-
-    if (
-      completedStatuses.includes(
-        bybitStatus
-      )
-    ) {
-      await firestore
-        .collection(
-          "withdrawals"
-        )
-        .doc(
-          withdrawalId
-        )
-        .set(
-          {
-            status:
-              "COMPLETED",
-
-            bybitStatus:
-              status.status ||
-              "SUCCESS",
-
-            txid,
-
-            completedAt:
-              FieldValue.serverTimestamp(),
-
-            updatedAt:
-              FieldValue.serverTimestamp(),
-          },
-          {
-            merge: true,
-          }
-        );
-
-      return {
-        checked: true,
-        completed: true,
-        failed: false,
-      };
-    }
-
-    // ----------------------------------------------------------
-    // FAILED STATUSES
-    // ----------------------------------------------------------
-
-    const failedStatuses = [
-      "fail",
-      "failed",
-      "cancel",
-      "cancelled",
-      "canceled",
-      "reject",
-      "rejected",
-    ];
-
-    if (
-      failedStatuses.includes(
-        bybitStatus
-      )
-    ) {
-      const reason =
-        status.failReason ||
-        status.failureReason ||
-        status.remark ||
-        `Bybit withdrawal status: ${status.status}`;
-
-      await restoreWithdrawal(
-        withdrawalId,
-        reason
-      );
-
-      await firestore
-        .collection(
-          "withdrawals"
-        )
-        .doc(
-          withdrawalId
-        )
-        .set(
-          {
-            bybitStatus:
-              status.status ||
-              "FAILED",
-
-            updatedAt:
-              FieldValue.serverTimestamp(),
-          },
-          {
-            merge: true,
-          }
-        );
-
-      return {
-        checked: true,
-        completed: false,
-        failed: true,
-      };
-    }
-
-    // ----------------------------------------------------------
-    // STILL PROCESSING
-    // ----------------------------------------------------------
-
-    await firestore
-      .collection(
-        "withdrawals"
-      )
-      .doc(
-        withdrawalId
-      )
-      .set(
-        {
-          bybitStatus:
-            status.status ||
-            "PROCESSING",
-
-          txid,
-
-          updatedAt:
-            FieldValue.serverTimestamp(),
-        },
-        {
-          merge: true,
-        }
-      );
-
-    return {
-      checked: true,
-      completed: false,
-      failed: false,
-    };
-  } catch (error) {
-    console.error(
-      `❌ Failed to monitor withdrawal ${withdrawalId}:`,
-      error.message
-    );
-
-    return {
-      checked: true,
-      completed: false,
-      failed: false,
-      error:
-        error.message,
-    };
-  }
-}
-
-// ============================================================
-// 15. AUTOMATIC WITHDRAWAL MONITOR
-// ============================================================
-
-let monitorRunning =
-  false;
-
-async function monitorPendingWithdrawals() {
-  if (
-    monitorRunning ||
-    !firestore
-  ) {
-    return {
-      checked: 0,
-      updated: 0,
-      completed: 0,
-      failed: 0,
-    };
-  }
-
-  monitorRunning =
-    true;
-
-  const summary = {
-    checked: 0,
-    updated: 0,
-    completed: 0,
-    failed: 0,
-  };
-
-  try {
-    const snapshot =
-      await firestore
-        .collection(
-          "withdrawals"
-        )
-        .where(
-          "status",
-          "==",
-          "PROCESSING"
-        )
-        .limit(50)
-        .get();
-
-    for (
-      const doc of
-        snapshot.docs
-    ) {
-      const result =
-        await processWithdrawal(
-          doc
-        );
-
-      if (
-        result?.checked
-      ) {
-        summary.checked++;
-      }
-
-      if (
-        result?.completed
-      ) {
-        summary.completed++;
-        summary.updated++;
-      }
-
-      if (
-        result?.failed
-      ) {
-        summary.failed++;
-        summary.updated++;
-      }
-    }
-
-    return summary;
-  } catch (error) {
-    console.error(
-      "❌ Withdrawal monitor:",
-      error.message
-    );
-
-    return {
-      ...summary,
-      error:
-        error.message,
-    };
-  } finally {
-    monitorRunning =
-      false;
-  }
-}
-
-// ------------------------------------------------------------
-// Compatibility alias.
-// ------------------------------------------------------------
-
-const monitorWithdrawals =
-  monitorPendingWithdrawals;
-
-// ============================================================
-// 16. WITHDRAWAL MONITOR START / STOP
-//
-// The master index.js can call these directly.
-// This removes the need for the fallback timer in index.js.
-// ============================================================
-
-let monitorTimer = null;
-
-function startMonitor(intervalMinutes = 1) {
-  const minutes = Number(intervalMinutes);
-
-  const intervalMs =
-    Number.isFinite(minutes) && minutes > 0
-      ? minutes * 60 * 1000
-      : 60 * 1000;
-
-  if (monitorTimer) {
-    console.log("ℹ️ Withdrawal monitor already running.");
-    return monitorTimer;
-  }
-
-  console.log(
-    `⏰ Withdrawal monitor: every ${
-      intervalMs / 60000
-    } minute(s).`
-  );
-
-  // Run one check immediately.
-  monitorPendingWithdrawals()
-    .then((summary) => {
-      console.log("💸 Withdrawal monitor:", summary);
-    })
-    .catch((error) => {
-      console.error(
-        "❌ Initial withdrawal monitor failed:",
-        error.message
-      );
-    });
-
-  monitorTimer = setInterval(async () => {
-    try {
-      const summary =
-        await monitorPendingWithdrawals();
-
-      console.log(
-        "💸 Withdrawal monitor:",
-        summary
-      );
-    } catch (error) {
-      console.error(
-        "❌ Withdrawal monitor interval failed:",
-        error.message
-      );
-    }
-  }, intervalMs);
-
-  return monitorTimer;
-}
-
-function stopMonitor() {
-  if (!monitorTimer) {
-    return;
-  }
-
-  clearInterval(monitorTimer);
-  monitorTimer = null;
-
-  console.log(
-    "🛑 Withdrawal monitor stopped."
-  );
-}
-
-// ============================================================
 // 16. WITHDRAWAL STATUS
 // ============================================================
 
@@ -2128,20 +1765,16 @@ async function getWithdrawalStatus(
   let message =
     "Your withdrawal is being processed.";
 
-  if (
-    data.status ===
-    "RESERVED"
-  ) {
-    message =
-      "Your withdrawal request has been received and your funds are reserved.";
+  if (data.status === "UNDER_REVIEW") {
+    message = "Your withdrawal request has been received and is under review.";
   }
 
-  if (
-    data.status ===
-    "PROCESSING"
-  ) {
-    message =
-      "Your withdrawal is being processed.";
+  if (data.status === "AWAITING_PAYMENT") {
+    message = "Your withdrawal has been approved and is awaiting payment.";
+  }
+
+  if (data.status === "TXID_SUBMITTED") {
+    message = "Your withdrawal payment TXID has been submitted and is being verified.";
   }
 
   if (
@@ -2192,14 +1825,6 @@ async function getWithdrawalStatus(
 
     destinationAddress:
       data.destinationAddress ||
-      "",
-
-    bybitWithdrawalId:
-      data.bybitWithdrawalId ||
-      "",
-
-    bybitStatus:
-      data.bybitStatus ||
       "",
 
     httpStatus:
@@ -2310,32 +1935,13 @@ async function getWithdrawalHistory(
 
 function getConfig() {
   return {
-    coin:
-      WITHDRAW_COIN,
-
-    chain:
-      WITHDRAW_CHAIN,
-
-    accountType:
-      WITHDRAW_ACCOUNT_TYPE,
-
-    minimum:
-      WITHDRAW_MINIMUM,
-
-    maximum:
-      WITHDRAW_MAXIMUM,
-
-    feePercent:
-      WITHDRAW_FEE_PERCENT,
-
-    bybitConfigured:
-      Boolean(
-        BYBIT_API_KEY &&
-        BYBIT_API_SECRET
-      ),
-
-    testnet:
-      BYBIT_TESTNET,
+    coin: WITHDRAW_COIN,
+    chain: WITHDRAW_CHAIN,
+    minimum: WITHDRAW_MINIMUM,
+    maximum: WITHDRAW_MAXIMUM,
+    feePercent: WITHDRAW_FEE_PERCENT,
+    manualPayout: true,
+    bybitWithdrawalEnabled: false,
   };
 }
 
@@ -2347,31 +1953,19 @@ function getConfig() {
 
 module.exports = {
   requestWithdrawal,
-
   getWithdrawalHistory,
-
   getWithdrawalStatus,
-
   monitorPendingWithdrawals,
-
   monitorWithdrawals,
-
   startMonitor,
-
   stopMonitor,
-
   reserveWithdrawal,
-
   restoreWithdrawal,
-
-  submitBybitWithdrawal,
-
-  getBybitWithdrawal,
-
-  // Telegram admin approval -> immediate Bybit submission.
   approveAndSubmitWithdrawal,
-
+  approveManualWithdrawal,
+  rejectWithdrawal,
+  submitWithdrawalTxid,
+  verifyWithdrawalTxid,
   processWithdrawal,
-
   getConfig,
 };

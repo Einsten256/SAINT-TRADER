@@ -33,6 +33,11 @@ const {
   FieldValue,
 } = require("firebase-admin/firestore");
 
+// The central ledger is the only authority that mutates user balances.
+// This service only verifies and records deposits, then delegates the
+// atomic credit operation to services/ledger.js.
+const ledger = require("./ledger");
+
 // ============================================================
 // 1. FIRESTORE
 // ============================================================
@@ -240,37 +245,7 @@ async function bybitRequest(
 }
 
 // ============================================================
-// 8. BALANCE NORMALIZATION
-// ============================================================
-
-function balancesOf(data = {}) {
-  const main =
-    Number(data.usdt_balance || 0);
-
-  const balances =
-    data.balances || {};
-
-  return {
-    exchange: roundMoney(
-      balances.exchange ?? main
-    ),
-
-    trade: roundMoney(
-      balances.trade ?? 0
-    ),
-
-    perpetual: roundMoney(
-      balances.perpetual ?? 0
-    ),
-
-    withdraw: roundMoney(
-      balances.withdraw ?? 0
-    ),
-  };
-}
-
-// ============================================================
-// 9. VALIDATION
+// 8. VALIDATION HELPERS
 // ============================================================
 
 function normalizeTxid(txid) {
@@ -400,6 +375,10 @@ async function findConfirmedDeposit(
 // ============================================================
 // 11. ATOMIC LEDGER CREDIT
 // ============================================================
+//
+// Deposit verification remains here, but balance mutation is delegated
+// to the central ledger so there is only one credit implementation.
+// ============================================================
 
 async function creditDepositToLedger(
   depositId,
@@ -407,223 +386,12 @@ async function creditDepositToLedger(
   amount,
   record
 ) {
-  if (!firestore) {
-    throw new Error(
-      "Database service is unavailable."
-    );
-  }
-
-  const depositRef =
-    firestore
-      .collection("deposits")
-      .doc(depositId);
-
-  const userRef =
-    firestore
-      .collection("users")
-      .doc(userId);
-
-  let alreadyCredited = false;
-
-  await firestore.runTransaction(
-    async (transaction) => {
-      const depositDoc =
-        await transaction.get(
-          depositRef
-        );
-
-      if (!depositDoc.exists) {
-        throw new Error(
-          "Deposit record could not be found."
-        );
-      }
-
-      const deposit =
-        depositDoc.data();
-
-      if (
-        deposit.status === "COMPLETED" &&
-        deposit.creditedToLedger === true
-      ) {
-        alreadyCredited = true;
-        return;
-      }
-
-      const userDoc =
-        await transaction.get(
-          userRef
-        );
-
-      if (!userDoc.exists) {
-        throw new Error(
-          "Your account record could not be found."
-        );
-      }
-
-      const user =
-        userDoc.data();
-
-      if (
-        user.is_frozen === true ||
-        user.status === "FROZEN"
-      ) {
-        throw new Error(
-          "Your account is currently restricted. Please contact support."
-        );
-      }
-
-      const credit =
-        roundMoney(amount);
-
-      if (
-        !Number.isFinite(credit) ||
-        credit <= 0
-      ) {
-        throw new Error(
-          "Invalid deposit credit amount."
-        );
-      }
-
-      const current =
-        Number(
-          user.usdt_balance || 0
-        );
-
-      const locked =
-        Number(
-          user.locked_principal || 0
-        );
-
-      const balances =
-        balancesOf(user);
-
-      const newBalance =
-        roundMoney(
-          current + credit
-        );
-
-      balances.exchange =
-        roundMoney(
-          balances.exchange + credit
-        );
-
-      const newLockedPrincipal =
-        roundMoney(
-          locked + credit
-        );
-
-      transaction.set(
-        userRef,
-        {
-          usdt_balance:
-            newBalance,
-
-          locked_principal:
-            newLockedPrincipal,
-
-          balances,
-
-          last_updated:
-            FieldValue.serverTimestamp(),
-
-          updatedAt:
-            FieldValue.serverTimestamp(),
-        },
-        {
-          merge: true,
-        }
-      );
-
-      transaction.set(
-        depositRef,
-        {
-          status:
-            "COMPLETED",
-
-          creditedToLedger:
-            true,
-
-          ledgerCreditAmount:
-            credit,
-
-          verifiedAt:
-            FieldValue.serverTimestamp(),
-
-          bybitDepositId:
-            record?.id || null,
-
-          bybitChain:
-            record?.chain || null,
-
-          bybitSuccessAt:
-            record?.successAt || null,
-
-          bybitToAddress:
-            record?.toAddress || null,
-
-          updatedAt:
-            FieldValue.serverTimestamp(),
-        },
-        {
-          merge: true,
-        }
-      );
-
-      const ledgerRef =
-        firestore
-          .collection(
-            "ledger_transactions"
-          )
-          .doc();
-
-      transaction.set(
-        ledgerRef,
-        {
-          ledgerTransactionId:
-            ledgerRef.id,
-
-          userId,
-
-          type:
-            "DEPOSIT_CREDIT",
-
-          direction:
-            "CREDIT",
-
-          amount: credit,
-
-          currency:
-            "USDT",
-
-          source:
-            "BYBIT_DEPOSIT",
-
-          depositId,
-
-          txid:
-            deposit.txid || "",
-
-          bybitDepositId:
-            record?.id || null,
-
-          createdAt:
-            FieldValue.serverTimestamp(),
-        }
-      );
-    }
-  );
-
-  return {
-    credited:
-      !alreadyCredited,
-
-    alreadyCredited,
-
+  return ledger.creditDepositToLedger(
     depositId,
-
-    amount:
-      roundMoney(amount),
-  };
+    userId,
+    amount,
+    record
+  );
 }
 
 // ============================================================

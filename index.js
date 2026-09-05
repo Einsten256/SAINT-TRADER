@@ -1835,6 +1835,111 @@ try {
 }
 
 // ============================================================
+// 33A. MANUAL SIGNAL TEST ROUTE
+// ============================================================
+// Creates exactly one signal for controlled testing.
+// Protected by a private environment key.
+// Does NOT change the normal 7PM / 9PM / 11PM scheduler.
+// Remove this route after testing is complete.
+// ============================================================
+
+app.post(
+  `${API_PREFIX}/dev/signal-now`,
+  async (req, res) => {
+    try {
+      const manualSignalEnabled =
+        String(
+          process.env.ENABLE_MANUAL_SIGNAL_TEST ||
+            "false"
+        ).toLowerCase() === "true";
+
+      if (!manualSignalEnabled) {
+        return res.status(404).json({
+          success: false,
+          code: "NOT_FOUND",
+          message: "Manual signal testing is disabled.",
+        });
+      }
+
+      const suppliedKey =
+        String(
+          req.headers["x-saint-test-key"] || ""
+        ).trim();
+
+      const configuredKey =
+        String(
+          process.env.MANUAL_SIGNAL_TEST_KEY || ""
+        ).trim();
+
+      if (
+        !configuredKey ||
+        !suppliedKey ||
+        suppliedKey !== configuredKey
+      ) {
+        return res.status(401).json({
+          success: false,
+          code: "UNAUTHORIZED",
+          message: "Invalid test key.",
+        });
+      }
+
+      if (
+        !firebaseManager ||
+        typeof firebaseManager.generateSignalNow !==
+          "function"
+      ) {
+        return res.status(503).json({
+          success: false,
+          code: "SIGNAL_SERVICE_UNAVAILABLE",
+          message: "Signal manager is unavailable.",
+        });
+      }
+
+      const sessionLabel =
+        String(
+          req.body?.session ||
+            req.body?.sessionLabel ||
+            "MANUAL TEST"
+        )
+          .trim()
+          .substring(0, 100) ||
+        "MANUAL TEST";
+
+      console.log(
+        `🧪 Manual signal test requested: ${sessionLabel}`
+      );
+
+      const result =
+        await firebaseManager.generateSignalNow(
+          sessionLabel
+        );
+
+      return res.status(201).json({
+        success: true,
+        message: "Manual signal created successfully.",
+        signal: result,
+      });
+
+    } catch (error) {
+      console.error(
+        "❌ Manual signal test failed:",
+        error.stack || error.message
+      );
+
+      return res.status(500).json({
+        success: false,
+        code: "MANUAL_SIGNAL_FAILED",
+        message:
+          NODE_ENV === "production"
+            ? "Unable to create manual signal."
+            : error.message ||
+              "Unable to create manual signal.",
+      });
+    }
+  }
+);
+
+// ============================================================
 // 34. DEPOSIT MONITOR STATE
 // ============================================================
 

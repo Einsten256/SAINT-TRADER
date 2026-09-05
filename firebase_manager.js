@@ -467,15 +467,18 @@ function normalizeSignalCode(
     return "";
   }
 
-  const raw = code.trim().toUpperCase();
-  const hasTrailingApostrophe = /\'$/.test(raw);
-  const base = raw
-    .replace(/[^A-Z0-9_-]/g, "")
-    .substring(0, 127);
+  const normalized =
+    code.trim().toUpperCase();
 
-  if (!base) return "";
+  if (
+    !/^[A-Z0-9]{12}$/.test(
+      normalized
+    )
+  ) {
+    return "";
+  }
 
-  return base + (hasTrailingApostrophe ? "'" : "");
+  return normalized;
 }
 
 // ============================================================
@@ -490,7 +493,7 @@ function generateSignalCode() {
 
   for (
     let i = 0;
-    i < 5;
+    i < 12;
     i++
   ) {
     code +=
@@ -502,7 +505,7 @@ function generateSignalCode() {
       ];
   }
 
-  return `${code}'`;
+  return code;
 }
 
 // ============================================================

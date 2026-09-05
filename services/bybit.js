@@ -383,6 +383,73 @@ async function request(
 }
 
 // ============================================================
+// 10A. SAFE PUBLIC BYBIT REQUEST
+// ============================================================
+// Bybit market ticker endpoints are public. They must NOT require
+// API credentials or pass through the private-auth configuration
+// gate used by request().
+async function publicRequest(
+  operation,
+  label = "Bybit public request"
+) {
+  let lastError = null;
+
+  for (
+    let attempt = 1;
+    attempt <= BYBIT_RETRY_ATTEMPTS;
+    attempt++
+  ) {
+    try {
+      const timeoutPromise =
+        new Promise(
+          (_, reject) => {
+            setTimeout(
+              () => {
+                reject(
+                  new Error(
+                    `${label} timed out after ${BYBIT_TIMEOUT_MS}ms`
+                  )
+                );
+              },
+              BYBIT_TIMEOUT_MS
+            );
+          }
+        );
+
+      const result =
+        await Promise.race([
+          operation(),
+          timeoutPromise,
+        ]);
+
+      return result;
+    } catch (error) {
+      lastError = error;
+
+      console.warn(
+        `⚠️ ${label} attempt ${attempt}/${BYBIT_RETRY_ATTEMPTS}: ${error.message}`
+      );
+
+      if (
+        attempt <
+        BYBIT_RETRY_ATTEMPTS
+      ) {
+        await sleep(
+          BYBIT_RETRY_DELAY
+        );
+      }
+    }
+  }
+
+  throw (
+    lastError ||
+    new Error(
+      `${label} failed.`
+    )
+  );
+}
+
+// ============================================================
 // 11. DEPOSIT RECORDS
 // ============================================================
 
@@ -689,7 +756,7 @@ async function getWithdrawal(
 // 15. GET TICKER
 // ============================================================
 
-async function getTicker(
+async function getTickerData(
   symbol,
   category = "spot"
 ) {
@@ -707,27 +774,48 @@ async function getTicker(
   }
 
   const response =
-    await request(
+    await publicRequest(
       () =>
         client.getTickers({
           category,
-          symbol:
-            cleanSymbol,
+          symbol: cleanSymbol,
         }),
-      `Bybit ticker ${cleanSymbol}`
+      `Bybit public ticker ${cleanSymbol}`
     );
 
-  return Number(
-    response
-      ?.result
-      ?.list?.[0]
-      ?.lastPrice || 0
-  );
+  const ticker =
+    response?.result?.list?.[0] || {};
+
+  const price = Number(ticker.lastPrice || 0);
+
+  const price24hPcnt =
+    Number(ticker.price24hPcnt || 0);
+
+  return {
+    symbol: cleanSymbol,
+    price,
+    change24h: Number.isFinite(price24hPcnt)
+      ? price24hPcnt * 100
+      : 0,
+    raw: ticker,
+  };
+}
+
+async function getTicker(
+  symbol,
+  category = "spot"
+) {
+  const ticker =
+    await getTickerData(symbol, category);
+
+  return ticker.price;
 }
 
 // ============================================================
 // 16. SYNC ONE MARKET PRICE
 // ============================================================
+
+const MARKET_HISTORY_LIMIT = 120;
 
 async function syncMarketPrice(
   symbol,
@@ -739,11 +827,13 @@ async function syncMarketPrice(
   }
 
   try {
-    const price =
-      await getTicker(
+    const ticker =
+      await getTickerData(
         symbol,
         category
       );
+
+    const price = Number(ticker.price);
 
     if (
       !Number.isFinite(price) ||
@@ -752,17 +842,24 @@ async function syncMarketPrice(
       return null;
     }
 
+    const now = new Date();
+    const updatedAt = now.toISOString();
+    const change24h = Number.isFinite(ticker.change24h)
+      ? Number(ticker.change24h.toFixed(4))
+      : 0;
+
     const payload = {
       symbol:
         displaySymbol ||
         symbol,
       price:
         roundMoney(price),
-      updatedAt:
-        new Date().toISOString(),
+      change24h,
+      priceChangePercent: change24h,
+      updatedAt,
     };
 
-    // Firestore
+    // Firestore — authoritative latest ticker snapshot.
     await firestore()
       .collection(
         "market_prices"
@@ -775,17 +872,43 @@ async function syncMarketPrice(
         }
       );
 
-    // RTDB
-    const db =
-      realtimeDatabase();
+    // RTDB — Flutter reads live market data from here.
+    const db = realtimeDatabase();
 
     if (db) {
-      await db
-        .ref(
-          `market_prices/${symbol}`
-        )
-        .set(payload);
+      const marketRef = db.ref(
+        `market_prices/${symbol}`
+      );
+
+      await marketRef.set(payload);
+
+      // Rolling real-price history for the live chart.
+      const historyRef = marketRef.child("history");
+      const historySnap = await historyRef.once("value");
+      const existing = historySnap.val() || {};
+
+      const nextKey = String(Date.now());
+      existing[nextKey] = {
+        price: roundMoney(price),
+        timestamp: now.getTime(),
+      };
+
+      const entries = Object.entries(existing)
+        .sort((a, b) => {
+          const ta = Number(a[1]?.timestamp || 0);
+          const tb = Number(b[1]?.timestamp || 0);
+          return ta - tb;
+        });
+
+      const trimmed = entries.slice(-MARKET_HISTORY_LIMIT);
+      const trimmedObject = Object.fromEntries(trimmed);
+
+      await historyRef.set(trimmedObject);
     }
+
+    console.log(
+      `📈 Market sync ${symbol}: ${payload.price} | 24h ${payload.change24h}%`
+    );
 
     return payload;
   } catch (error) {
@@ -802,22 +925,27 @@ async function syncMarketPrice(
 // 17. SYNC MARKETS
 // ============================================================
 
+const LIVE_MARKETS = [
+  ["BTCUSDT", "BTC/USDT", "spot"],
+  ["ETHUSDT", "ETH/USDT", "spot"],
+  ["ADAUSDT", "ADA/USDT", "spot"],
+  ["BCHUSDT", "BCH/USDT", "spot"],
+  ["DASHUSDT", "DASH/USDT", "spot"],
+  ["DOGEUSDT", "DOGE/USDT", "spot"],
+];
+
 async function syncMarkets() {
   if (!isBybitConfigured()) {
     return false;
   }
 
-  await syncMarketPrice(
-    "BTCUSDT",
-    "BTC/USDT",
-    "spot"
-  );
-
-  await syncMarketPrice(
-    "ETHUSDT",
-    "ETH/USDT",
-    "spot"
-  );
+  for (const [symbol, displaySymbol, category] of LIVE_MARKETS) {
+    await syncMarketPrice(
+      symbol,
+      displaySymbol,
+      category
+    );
+  }
 
   return true;
 }
@@ -879,58 +1007,51 @@ async function syncSentiment() {
 // 19. START MARKET SYNC
 // ============================================================
 
+const MARKET_SYNC_INTERVAL_MS = 5000;
+
 function startMarketSync() {
   if (marketTask) {
     return;
   }
 
-  if (!cron) {
-    console.warn(
-      "⚠️ Automatic market sync unavailable because node-cron is not installed."
-    );
-
-    // Perform one immediate sync anyway.
-    syncMarkets().catch(
-      () => {}
-    );
-
-    syncSentiment().catch(
-      () => {}
-    );
-
-    return;
-  }
-
-  marketTask =
-    cron.schedule(
-      "*/1 * * * *",
-      () => {
-        syncMarkets().catch(
-          () => {}
-        );
-
-        syncSentiment().catch(
-          () => {}
-        );
-      },
-      {
-        timezone:
-          "Africa/Kampala",
-      }
-    );
-
   console.log(
-    "🟢 Bybit market synchronization started."
+    `🟢 Bybit live market synchronization started: every ${MARKET_SYNC_INTERVAL_MS / 1000} seconds.`
   );
 
   // Immediate first sync.
   syncMarkets().catch(
-    () => {}
+    (error) =>
+      console.warn(
+        "⚠️ Initial market sync:",
+        error.message
+      )
   );
 
   syncSentiment().catch(
-    () => {}
+    (error) =>
+      console.warn(
+        "⚠️ Initial sentiment sync:",
+        error.message
+      )
   );
+
+  marketTask = setInterval(() => {
+    syncMarkets().catch(
+      (error) =>
+        console.warn(
+          "⚠️ Scheduled market sync:",
+          error.message
+        )
+    );
+
+    syncSentiment().catch(
+      (error) =>
+        console.warn(
+          "⚠️ Scheduled sentiment sync:",
+          error.message
+        )
+    );
+  }, MARKET_SYNC_INTERVAL_MS);
 }
 
 // ============================================================
@@ -938,17 +1059,19 @@ function startMarketSync() {
 // ============================================================
 
 function stopMarketSync() {
-  if (marketTask) {
-    try {
-      marketTask.stop();
-    } catch (_) {}
-
-    marketTask = null;
-
-    console.log(
-      "🛑 Bybit market synchronization stopped."
-    );
+  if (!marketTask) {
+    return;
   }
+
+  try {
+    clearInterval(marketTask);
+  } catch (_) {}
+
+  marketTask = null;
+
+  console.log(
+    "🛑 Bybit market synchronization stopped."
+  );
 }
 
 // ============================================================
@@ -1250,6 +1373,7 @@ module.exports = {
 
   // Market
   getTicker,
+  getTickerData,
   syncMarketPrice,
   syncMarkets,
   syncSentiment,

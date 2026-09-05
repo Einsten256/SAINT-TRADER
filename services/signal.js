@@ -207,16 +207,18 @@ function validateUserId(
 // NORMALIZE SIGNAL CODE
 // ============================================================
 //
-// firebase_manager.js generates codes like:
+// Current Saint Crypto signal-code format:
 //
-//     A7K2P
+//     XXXXXXXXXXXX
 //
-// Older Flutter versions may send:
+// Exactly 12 uppercase letters/numbers.
+// No apostrophe.
+// No spaces.
+// No dash.
+// No underscore.
 //
-//     A7K2P'
-//
-// We remove the apostrophe and other surrounding characters
-// so both formats can work.
+// Signal codes are generated server-side by
+// firebase_manager.js.
 //
 // ============================================================
 
@@ -231,17 +233,18 @@ function normalizeSignalCode(
     return "";
   }
 
-  return code
-    .trim()
-    .toUpperCase()
-    .replace(
-      /[^A-Z0-9_-]/g,
-      ""
+  const normalized =
+    code.trim().toUpperCase();
+
+  if (
+    !/^[A-Z0-9]{12}$/.test(
+      normalized
     )
-    .substring(
-      0,
-      128
-    );
+  ) {
+    return "";
+  }
+
+  return normalized;
 }
 
 // ============================================================
@@ -956,7 +959,7 @@ async function getExistingRedemption(
 // Flutter sends:
 //
 // {
-//   "code": "ABCDE"
+//   "code": "8FQ2M7KX91ZT"
 // }
 //
 // UID comes ONLY from:

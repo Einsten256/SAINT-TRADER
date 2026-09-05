@@ -371,16 +371,18 @@ async function creditDepositToLedger(
         );
 
       // --------------------------------------------------------
-      // TRADE BALANCE
+      // EXCHANGE BALANCE
       //
-      // A verified deposit becomes trading capital immediately.
+      // A verified deposit enters the user's Exchange balance first.
+      // The user must explicitly move funds from Exchange -> Trade
+      // through the internal transfer endpoint before trading.
       // The corresponding amount is also added to locked_principal,
-      // so it cannot be withdrawn as profit.
+      // so deposited principal cannot be withdrawn as profit.
       // --------------------------------------------------------
 
-      balances.trade =
+      balances.exchange =
         roundMoney(
-          balances.trade +
+          balances.exchange +
             credit
         );
 
