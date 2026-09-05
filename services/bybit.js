@@ -430,6 +430,23 @@ async function publicRequest(
         `⚠️ ${label} attempt ${attempt}/${BYBIT_RETRY_ATTEMPTS}: ${error.message}`
       );
 
+      const diagnostic = {
+        name: error?.name || null,
+        message: error?.message || null,
+        status: error?.status ?? error?.statusCode ?? error?.response?.status ?? null,
+        statusText: error?.statusText ?? error?.response?.statusText ?? null,
+        responseData: error?.response?.data ?? error?.data ?? error?.body ?? null,
+      };
+
+      if (
+        diagnostic.status !== null ||
+        diagnostic.responseData !== null
+      ) {
+        console.warn(
+          `[BYBIT PUBLIC DEBUG] ${label}: ${JSON.stringify(diagnostic)}`
+        );
+      }
+
       if (
         attempt <
         BYBIT_RETRY_ATTEMPTS
