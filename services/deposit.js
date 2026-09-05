@@ -10,7 +10,7 @@
 // - Accept Flutter deposit submission
 // - Validate amount / network / address / TXID
 // - Prevent duplicate TXIDs
-// - Verify deposit against Bybit
+// - Verify deposit on the TRON blockchain
 // - Create pending deposit records
 // - Automatically monitor pending deposits
 // - Atomically credit the user's Firestore ledger
@@ -25,8 +25,6 @@
 // ============================================================
 
 require("dotenv").config();
-
-const { RestClientV5 } = require("bybit-api");
 
 const {
   getFirestore,
@@ -119,46 +117,58 @@ const CENTRAL_DEPOSIT_ADDRESS =
   "TKeND3TnF2L1J7LUjatwrGoxLXP9AH5wZw";
 
 // ============================================================
-// 4. BYBIT CONFIGURATION
+// 4. TRON NETWORK CONFIGURATION
 // ============================================================
 
-const BYBIT_API_KEY =
-  env("BYBIT_API_KEY");
+const TRONGRID_BASE_URL =
+  (
+    env("TRONGRID_BASE_URL") ||
+    "https://api.trongrid.io"
+  ).replace(/\/+$/, "");
 
-const BYBIT_API_SECRET =
-  env("BYBIT_API_SECRET");
+const TRONGRID_API_KEY =
+  env("TRONGRID_API_KEY");
 
-const BYBIT_TESTNET =
-  String(
-    process.env.BYBIT_TESTNET || "false"
-  ).toLowerCase() === "true";
+// Mainnet Tether USD (USDT) TRC-20 contract.
+const USDT_TRC20_CONTRACT =
+  env("USDT_TRC20_CONTRACT") ||
+  "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
-const BYBIT_RECV_WINDOW =
-  int(
-    process.env.BYBIT_RECV_WINDOW,
-    10000
+const USDT_TRC20_CONTRACT_HEX =
+  "41a614f803b6fd780986a42c78ec9c7f77e6ded13c";
+
+const USDT_DECIMALS = 6;
+const TRC20_TRANSFER_SELECTOR = "a9059cbb";
+
+const TRON_REQUEST_TIMEOUT_MS =
+  Math.max(
+    5000,
+    int(
+      env(
+        "TRON_REQUEST_TIMEOUT_MS"
+      ),
+      15000
+    )
   );
 
-const BYBIT_TIMEOUT_MS =
-  int(
-    process.env.BYBIT_TIMEOUT_MS,
-    30000
-  );
-
-const BYBIT_RETRY_ATTEMPTS =
+const TRON_RETRY_ATTEMPTS =
   Math.max(
     1,
     int(
-      process.env.BYBIT_RETRY_ATTEMPTS,
+      env(
+        "TRON_RETRY_ATTEMPTS"
+      ),
       3
     )
   );
 
-const BYBIT_RETRY_DELAY =
+const TRON_RETRY_DELAY =
   Math.max(
     1,
     int(
-      process.env.BYBIT_RETRY_DELAY,
+      env(
+        "TRON_RETRY_DELAY"
+      ),
       2
     )
   );
@@ -171,7 +181,9 @@ const DEPOSIT_MONITOR_MINUTES =
   Math.max(
     1,
     int(
-      process.env.DEPOSIT_MONITOR_MINUTES,
+      env(
+        "DEPOSIT_MONITOR_MINUTES"
+      ),
       1
     )
   );
@@ -180,72 +192,367 @@ let depositMonitorInterval = null;
 let depositMonitorRunning = false;
 
 // ============================================================
-// 6. BYBIT CLIENT
+// 6. TRON HTTP HELPERS
 // ============================================================
 
-const bybitClient =
-  new RestClientV5({
-    key: BYBIT_API_KEY,
-    secret: BYBIT_API_SECRET,
-    testnet: BYBIT_TESTNET,
-    recv_window: BYBIT_RECV_WINDOW,
-  });
-
-// ============================================================
-// 7. BYBIT REQUEST WRAPPER
-// ============================================================
-
-async function bybitRequest(
-  operation,
+async function tronRequest(
+  path,
+  body,
   label
 ) {
   let lastError = null;
 
   for (
     let attempt = 1;
-    attempt <= BYBIT_RETRY_ATTEMPTS;
+    attempt <= TRON_RETRY_ATTEMPTS;
     attempt++
   ) {
-    try {
-      return await Promise.race([
-        operation(),
+    const controller =
+      new AbortController();
 
-        new Promise((_, reject) => {
-          setTimeout(() => {
-            reject(
-              new Error(
-                `${label} timed out after ${BYBIT_TIMEOUT_MS}ms.`
-              )
-            );
-          }, BYBIT_TIMEOUT_MS);
-        }),
-      ]);
+    const timeout =
+      setTimeout(
+        () =>
+          controller.abort(),
+        TRON_REQUEST_TIMEOUT_MS
+      );
+
+    try {
+      const headers = {
+        "Content-Type":
+          "application/json",
+      };
+
+      if (TRONGRID_API_KEY) {
+        headers[
+          "TRON-PRO-API-KEY"
+        ] =
+          TRONGRID_API_KEY;
+      }
+
+      const response =
+        await fetch(
+          `${TRONGRID_BASE_URL}${path}`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          }
+        );
+
+      let data = null;
+
+      try {
+        data =
+          await response.json();
+      } catch (_) {
+        data = null;
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          `${label} returned HTTP ${response.status}.`
+        );
+      }
+
+      return data || {};
     } catch (error) {
       lastError = error;
 
       console.warn(
-        `⚠️ ${label} attempt ${attempt}/${BYBIT_RETRY_ATTEMPTS}: ${error.message}`
+        `⚠️ ${label} attempt ${attempt}/${TRON_RETRY_ATTEMPTS}: ${error.message}`
       );
 
       if (
         attempt <
-        BYBIT_RETRY_ATTEMPTS
+        TRON_RETRY_ATTEMPTS
       ) {
         await sleep(
-          BYBIT_RETRY_DELAY * 1000
+          TRON_RETRY_DELAY * 1000
         );
       }
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
   throw (
     lastError ||
-    new Error(`${label} failed.`)
+    new Error(
+      `${label} failed.`
+    )
+  );
+}
+
+function normalizeTronHex(value) {
+  const raw =
+    String(value || "")
+      .toLowerCase()
+      .replace(/^0x/, "");
+
+  if (
+    raw.startsWith("41") &&
+    raw.length === 42
+  ) {
+    return raw;
+  }
+
+  if (
+    /^[0-9a-f]{40}$/.test(raw)
+  ) {
+    return `41${raw}`;
+  }
+
+  return raw;
+}
+
+function tronBase58Decode(address) {
+  const alphabet =
+    "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+  let value = 0n;
+
+  for (const char of String(address || "")) {
+    const index =
+      alphabet.indexOf(char);
+
+    if (index < 0) {
+      throw new Error(
+        "Invalid TRON address."
+      );
+    }
+
+    value =
+      value * 58n +
+      BigInt(index);
+  }
+
+  let hex =
+    value.toString(16);
+
+  if (hex.length % 2 !== 0) {
+    hex = `0${hex}`;
+  }
+
+  let leadingZeros = 0;
+
+  for (
+    const char of String(address || "")
+  ) {
+    if (char !== "1") break;
+    leadingZeros++;
+  }
+
+  return Buffer.concat([
+    Buffer.alloc(leadingZeros),
+    Buffer.from(hex, "hex"),
+  ]);
+}
+
+function tronAddressToHex(address) {
+  const decoded =
+    tronBase58Decode(
+      String(address || "").trim()
+    );
+
+  if (decoded.length !== 25) {
+    throw new Error(
+      "Invalid TRON address length."
+    );
+  }
+
+  const payload =
+    decoded.subarray(0, 21);
+
+  const checksum =
+    decoded.subarray(21, 25);
+
+  const first =
+    require("crypto")
+      .createHash("sha256")
+      .update(payload)
+      .digest();
+
+  const second =
+    require("crypto")
+      .createHash("sha256")
+      .update(first)
+      .digest();
+
+  if (
+    !second
+      .subarray(0, 4)
+      .equals(checksum)
+  ) {
+    throw new Error(
+      "Invalid TRON address checksum."
+    );
+  }
+
+  return payload.toString("hex");
+}
+
+function validTron(address) {
+  try {
+    const normalized =
+      String(address || "").trim();
+
+    if (!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(normalized)) {
+      return false;
+    }
+
+    tronAddressToHex(normalized);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function decodeTrc20Transfer(
+  transaction
+) {
+  const contracts =
+    transaction
+      ?.raw_data
+      ?.contract;
+
+  if (
+    !Array.isArray(contracts) ||
+    contracts.length !== 1
+  ) {
+    return null;
+  }
+
+  const contract = contracts[0];
+
+  if (
+    !contract ||
+    contract.type !==
+      "TriggerSmartContract"
+  ) {
+    return null;
+  }
+
+  const parameter =
+    contract.parameter?.value ||
+    {};
+
+  const contractHex =
+    normalizeTronHex(
+      parameter.contract_address
+    );
+
+  const data =
+    String(
+      parameter.data || ""
+    ).toLowerCase();
+
+  if (
+    !data.startsWith(
+      TRC20_TRANSFER_SELECTOR
+    ) ||
+    data.length <
+      8 + 64 + 64
+  ) {
+    return null;
+  }
+
+  const recipientWord =
+    data.slice(8, 72);
+
+  const amountWord =
+    data.slice(72, 136);
+
+  if (
+    !/^[0-9a-f]{64}$/.test(
+      recipientWord
+    ) ||
+    !/^[0-9a-f]{64}$/.test(
+      amountWord
+    )
+  ) {
+    return null;
+  }
+
+  return {
+    contractHex,
+    recipientHex:
+      `41${recipientWord.slice(-40)}`,
+    amountUnits:
+      BigInt(`0x${amountWord}`),
+  };
+}
+
+function verifyUsdtTransferEvent(
+  receipt,
+  expectedRecipientHex,
+  expectedAmountUnits
+) {
+  const logs = Array.isArray(receipt?.log)
+    ? receipt.log
+    : [];
+
+  const TRANSFER_EVENT_TOPIC =
+    "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+  const expectedContractNoPrefix =
+    USDT_TRC20_CONTRACT_HEX.slice(2).toLowerCase();
+
+  return logs.some((log = {}) => {
+    const address = String(log.address || "")
+      .replace(/^0x/, "")
+      .toLowerCase();
+
+    const topics = Array.isArray(log.topics)
+      ? log.topics.map((topic) => String(topic || "").toLowerCase())
+      : [];
+
+    const valueHex = String(log.data || "").toLowerCase().replace(/^0x/, "");
+
+    if (address !== expectedContractNoPrefix) return false;
+    if (topics[0] !== TRANSFER_EVENT_TOPIC) return false;
+    if (!/^[0-9a-f]{64}$/.test(valueHex)) return false;
+
+    const recipientTopic = topics[2] || "";
+    const normalizedRecipient =
+      recipientTopic.length === 64
+        ? `41${recipientTopic.slice(-40)}`
+        : "";
+
+    if (normalizedRecipient !== expectedRecipientHex) return false;
+
+    try {
+      return BigInt(`0x${valueHex}`) === expectedAmountUnits;
+    } catch (_) {
+      return false;
+    }
+  });
+}
+
+function expectedAmountUnits(
+  amount
+) {
+  const numeric =
+    Number(amount);
+
+  if (
+    !Number.isFinite(numeric) ||
+    numeric <= 0
+  ) {
+    return 0n;
+  }
+
+  return BigInt(
+    Math.round(
+      numeric *
+        10 ** USDT_DECIMALS
+    )
   );
 }
 
 // ============================================================
-// 8. VALIDATION HELPERS
+// 7. VALIDATION HELPERS
 // ============================================================
 
 function normalizeTxid(txid) {
@@ -261,27 +568,35 @@ function validTxid(txid) {
 }
 
 // ============================================================
-// 10. FIND CONFIRMED BYBIT DEPOSIT
+// 8. FIND CONFIRMED TRON USDT DEPOSIT
+//
+// A deposit is considered final only when:
+// - the transaction exists in the solidified TRON view;
+// - the transaction is a TriggerSmartContract;
+// - it calls the mainnet USDT TRC-20 contract;
+// - it encodes transfer(address,uint256);
+// - the recipient is exactly the Saint Crypto deposit wallet;
+// - the amount matches exactly at 6 decimals;
+// - the solidified receipt reports SUCCESS.
+//
+// No Bybit API is used.
 // ============================================================
 
 async function findConfirmedDeposit(
   txid,
   expectedAmount
 ) {
-  if (
-    !BYBIT_API_KEY ||
-    !BYBIT_API_SECRET
-  ) {
-    throw new Error(
-      "Deposit verification service is not configured."
-    );
-  }
-
   const cleanTxid =
     normalizeTxid(txid);
 
   if (!cleanTxid) {
     return null;
+  }
+
+  if (!validTxid(cleanTxid)) {
+    throw new Error(
+      "The transaction ID format is invalid."
+    );
   }
 
   const expected =
@@ -294,108 +609,145 @@ async function findConfirmedDeposit(
     return null;
   }
 
-  const response =
-    await bybitRequest(
-      () =>
-        bybitClient.getDepositRecords({
-          coin: DEPOSIT_COIN,
-          txID: cleanTxid,
-          limit: 50,
-        }),
-      "Deposit verification"
-    );
-
-  if (!response) {
-    throw new Error(
-      "Bybit returned an empty response."
-    );
-  }
-
-  if (response.retCode !== 0) {
-    const error = new Error(
-      response.retMsg ||
-        "We could not verify this transaction with Bybit yet."
-    );
-
-    error.bybitRetCode =
-      response.retCode;
-
-    throw error;
-  }
-
-  const rows =
-    Array.isArray(
-      response.result?.rows
+  if (
+    !validTron(
+      CENTRAL_DEPOSIT_ADDRESS
     )
-      ? response.result.rows
-      : [];
+  ) {
+    throw new Error(
+      "Saint Crypto deposit address is invalid."
+    );
+  }
 
-  const expectedTxid =
-    cleanTxid.toLowerCase();
+  const expectedRecipientHex =
+    tronAddressToHex(
+      CENTRAL_DEPOSIT_ADDRESS
+    );
 
-  return (
-    rows.find((row = {}) => {
-      const rowTxid =
-        String(row.txID || "")
-          .trim()
-          .toLowerCase();
+  const expectedContractHex =
+    normalizeTronHex(
+      USDT_TRC20_CONTRACT_HEX
+    );
 
-      const amount =
-        Number(row.amount || 0);
+  const expectedUnits =
+    expectedAmountUnits(
+      expected
+    );
 
-      const status =
-        Number(row.status);
+  const transaction =
+    await tronRequest(
+      "/walletsolidity/gettransactionbyid",
+      {
+        value: cleanTxid,
+      },
+      "TRON transaction lookup"
+    );
 
-      const chain =
-        String(row.chain || "")
-          .trim()
-          .toUpperCase();
+  if (
+    !transaction ||
+    !transaction.raw_data
+  ) {
+    return null;
+  }
 
-      const toAddress =
-        String(row.toAddress || "")
-          .trim();
+  const transfer =
+    decodeTrc20Transfer(
+      transaction
+    );
 
-      return (
-        rowTxid === expectedTxid &&
-        Math.abs(
-          amount - expected
-        ) < 0.01 &&
-        chain === DEPOSIT_CHAIN &&
-        status === 3 &&
-        (
-          !CENTRAL_DEPOSIT_ADDRESS ||
-          toAddress ===
-            CENTRAL_DEPOSIT_ADDRESS
-        )
-      );
-    }) || null
-  );
+  if (!transfer) {
+    return null;
+  }
+
+  if (
+    transfer.contractHex !==
+    expectedContractHex
+  ) {
+    throw new Error(
+      `TXID uses a different TRC-20 contract. Expected USDT contract ${USDT_TRC20_CONTRACT}.`
+    );
+  }
+
+  if (
+    transfer.recipientHex !==
+    expectedRecipientHex
+  ) {
+    return null;
+  }
+
+  if (
+    transfer.amountUnits !==
+    expectedUnits
+  ) {
+    return null;
+  }
+
+  const receipt =
+    await tronRequest(
+      "/walletsolidity/gettransactioninfobyid",
+      {
+        value: cleanTxid,
+      },
+      "TRON transaction receipt"
+    );
+
+  const receiptResult =
+    String(
+      receipt?.receipt?.result || ""
+    ).toUpperCase();
+
+  if (
+    !receipt?.blockNumber ||
+    receiptResult !== "SUCCESS"
+  ) {
+    return null;
+  }
+
+  if (
+    !verifyUsdtTransferEvent(
+      receipt,
+      expectedRecipientHex,
+      expectedUnits
+    )
+  ) {
+    return null;
+  }
+
+  const blockTimestamp =
+    Number(
+      receipt.blockTimeStamp ||
+      transaction.block_timestamp ||
+      0
+    );
+
+  return {
+    id: null,
+    txID: cleanTxid,
+    amount: expected,
+    chain: DEPOSIT_CHAIN,
+    toAddress:
+      CENTRAL_DEPOSIT_ADDRESS,
+    status: 3,
+    successAt:
+      blockTimestamp > 0
+        ? new Date(blockTimestamp).toISOString()
+        : null,
+    tokenContract:
+      USDT_TRC20_CONTRACT,
+    verificationSource:
+      "TRON_SOLIDITYNODE",
+  };
 }
 
 // ============================================================
-// 11. ATOMIC LEDGER CREDIT
-// ============================================================
+// 10. ATOMIC LEDGER CREDIT
 //
 // Deposit verification remains here, but balance mutation is delegated
 // to the central ledger so there is only one credit implementation.
 // ============================================================
 
-async function creditDepositToLedger(
-  depositId,
-  userId,
-  amount,
-  record
-) {
-  return ledger.creditDepositToLedger(
-    depositId,
-    userId,
-    amount,
-    record
-  );
-}
-
 // ============================================================
-// 12. CREATE PENDING DEPOSIT
+// 11. CREATE PENDING DEPOSIT
 // ============================================================
 
 async function createDepositRecord(
@@ -749,7 +1101,7 @@ async function submitDeposit(
         );
     } catch (error) {
       console.warn(
-        "⚠️ Immediate Bybit deposit check:",
+        "⚠️ Immediate TRON deposit check:",
         error.message
       );
     }
@@ -773,7 +1125,7 @@ async function submitDeposit(
         amount:
           roundMoney(amount),
         message:
-          "Deposit submitted successfully. Waiting for real Bybit confirmation.",
+          "Deposit submitted successfully. Waiting for real TRON confirmation.",
         httpStatus: 200,
       };
     }
@@ -783,8 +1135,14 @@ async function submitDeposit(
         status:
           "VERIFYING",
 
-        bybitDepositId:
-          record.id || null,
+        verificationSource:
+          record.verificationSource || "TRON_SOLIDITYNODE",
+
+        blockchainTransactionId:
+          record.txID || txid,
+
+        tokenContract:
+          record.tokenContract || USDT_TRC20_CONTRACT,
 
         lastCheckedAt:
           FieldValue.serverTimestamp(),
@@ -938,8 +1296,14 @@ async function processDeposit(doc) {
         status:
           "VERIFYING",
 
-        bybitDepositId:
-          record.id || null,
+        verificationSource:
+          record.verificationSource || "TRON_SOLIDITYNODE",
+
+        blockchainTransactionId:
+          record.txID || txid,
+
+        tokenContract:
+          record.tokenContract || USDT_TRC20_CONTRACT,
 
         lastCheckedAt:
           FieldValue.serverTimestamp(),
@@ -1329,6 +1693,15 @@ async function getDepositStatus(
     bybitDepositId:
       data.bybitDepositId || "",
 
+    blockchainTransactionId:
+      data.blockchainTransactionId || data.txid || "",
+
+    tokenContract:
+      data.tokenContract || USDT_TRC20_CONTRACT,
+
+    verificationSource:
+      data.verificationSource || "TRON_SOLIDITYNODE",
+
     verifiedAt:
       data.verifiedAt || null,
 
@@ -1428,14 +1801,13 @@ function getConfig() {
     depositAddress:
       CENTRAL_DEPOSIT_ADDRESS,
 
-    bybitConfigured:
+    tronGridConfigured:
       Boolean(
-        BYBIT_API_KEY &&
-        BYBIT_API_SECRET
+        TRONGRID_BASE_URL
       ),
 
-    testnet:
-      BYBIT_TESTNET,
+    tokenContract:
+      USDT_TRC20_CONTRACT,
 
     monitorMinutes:
       DEPOSIT_MONITOR_MINUTES,
