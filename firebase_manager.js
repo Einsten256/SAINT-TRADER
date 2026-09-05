@@ -87,7 +87,7 @@ const SIGNAL_PROFIT =
 
 const SIGNAL_EXPIRY_MINUTES =
   Number(
-    process.env.SIGNAL_EXPIRY_MINUTES || "10"
+    process.env.SIGNAL_EXPIRY_MINUTES || "20"
   );
 
 const SIGNAL_TIMEZONE =

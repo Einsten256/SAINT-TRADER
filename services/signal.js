@@ -1557,34 +1557,13 @@ async function redeemSignal(
         );
 
         // ----------------------------------------------------
-        // MARK SIGNAL AS REDEEMED
+        // IMPORTANT: DO NOT MARK THE GLOBAL SIGNAL AS REDEEMED
         // ----------------------------------------------------
-
-        transaction.update(
-          signalRef,
-          {
-            active:
-              false,
-
-            isRedeemed:
-              true,
-
-            status:
-              "REDEEMED",
-
-            redeemedBy:
-              cleanUserId,
-
-            redeemedReward:
-              rewardAmount,
-
-            redeemedAt:
-              FieldValue.serverTimestamp(),
-
-            updated_at:
-              FieldValue.serverTimestamp(),
-          }
-        );
+        // One signal code is shared by ALL eligible users.
+        // Each user may redeem it only once because redemptionRef
+        // is unique per user + code. The signal stays active until
+        // its normal expires_at time.
+        // ----------------------------------------------------
 
         // ----------------------------------------------------
         // RETURN SIGNAL INFORMATION
