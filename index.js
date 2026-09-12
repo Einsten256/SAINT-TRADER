@@ -1940,6 +1940,352 @@ app.post(
 );
 
 // ============================================================
+// 33B. BUSINESS MANAGER ADMIN API
+// ============================================================
+// Private desktop-admin endpoints.
+//
+// The Control Room already authenticates Kendrick locally.
+// These endpoints add the server-side authorization layer needed
+// for the desktop Business Manager to call the EXISTING Render
+// backend without introducing a second approval workflow.
+//
+// IMPORTANT:
+// - No withdrawal logic is duplicated here.
+// - No balance mutation is performed here.
+// - No signal schema is duplicated here.
+// - Existing service functions remain the source of truth.
+// ============================================================
+
+function requireBusinessManagerAdmin(
+  req,
+  res,
+  next
+) {
+  const configuredKey =
+    String(
+      process.env.SAINT_CRYPTO_INTERNAL_ADMIN_KEY ||
+        process.env.MANUAL_SIGNAL_TEST_KEY ||
+        ""
+    ).trim();
+
+  const suppliedKey =
+    String(
+      req.headers["x-saint-admin-key"] ||
+        req.headers["x-saint-test-key"] ||
+        ""
+    ).trim();
+
+  if (
+    !configuredKey ||
+    !suppliedKey ||
+    suppliedKey !== configuredKey
+  ) {
+    return res.status(401).json({
+      success: false,
+      code: "ADMIN_UNAUTHORIZED",
+      message: "Business Manager admin authorization failed.",
+    });
+  }
+
+  return next();
+}
+
+// ------------------------------------------------------------
+// MANUAL SIGNAL GENERATION
+// Uses the existing firebase_manager signal generator.
+// Does not alter the normal scheduled signal windows.
+// ------------------------------------------------------------
+
+app.post(
+  `${API_PREFIX}/admin/business-manager/signals/generate`,
+  requireBusinessManagerAdmin,
+  async (req, res) => {
+    try {
+      if (
+        !firebaseManager ||
+        typeof firebaseManager.generateSignalNow !==
+          "function"
+      ) {
+        return res.status(503).json({
+          success: false,
+          code: "SIGNAL_SERVICE_UNAVAILABLE",
+          message: "Signal manager is unavailable.",
+        });
+      }
+
+      const sessionLabel =
+        String(
+          req.body?.session ||
+            req.body?.sessionLabel ||
+            "BUSINESS MANAGER"
+        )
+          .trim()
+          .substring(0, 100) ||
+        "BUSINESS MANAGER";
+
+      console.log(
+        `🟣 Business Manager signal generation requested: ${sessionLabel}`
+      );
+
+      const result =
+        await firebaseManager.generateSignalNow(
+          sessionLabel
+        );
+
+      return res.status(201).json({
+        success: true,
+        message: "Business Manager signal created successfully.",
+        signal: result,
+      });
+    } catch (error) {
+      console.error(
+        "❌ Business Manager signal generation failed:",
+        error.stack || error.message
+      );
+
+      return res.status(500).json({
+        success: false,
+        code: "BUSINESS_MANAGER_SIGNAL_FAILED",
+        message:
+          NODE_ENV === "production"
+            ? "Unable to create the signal."
+            : error.message ||
+              "Unable to create the signal.",
+      });
+    }
+  }
+);
+
+// ------------------------------------------------------------
+// WITHDRAWAL APPROVAL
+// Calls the existing transactional withdrawal service.
+// ------------------------------------------------------------
+
+app.post(
+  `${API_PREFIX}/admin/business-manager/withdrawals/:withdrawalId/approve`,
+  requireBusinessManagerAdmin,
+  async (req, res) => {
+    try {
+      if (
+        !withdrawal ||
+        typeof withdrawal.approveAndSubmitWithdrawal !==
+          "function"
+      ) {
+        return res.status(503).json({
+          success: false,
+          code: "WITHDRAWAL_SERVICE_UNAVAILABLE",
+          message: "Withdrawal service is unavailable.",
+        });
+      }
+
+      const withdrawalId =
+        String(
+          req.params.withdrawalId || ""
+        ).trim();
+
+      if (!withdrawalId) {
+        return res.status(400).json({
+          success: false,
+          code: "WITHDRAWAL_ID_REQUIRED",
+          message: "Withdrawal ID is required.",
+        });
+      }
+
+      const adminIdentity = {
+        id: "BUSINESS_MANAGER",
+        username: "Kendrick Saint",
+      };
+
+      const result =
+        await withdrawal.approveAndSubmitWithdrawal(
+          withdrawalId,
+          adminIdentity
+        );
+
+      return res.status(200).json({
+        success: true,
+        message: "Withdrawal approved and moved to payment.",
+        withdrawal: result,
+      });
+    } catch (error) {
+      console.error(
+        "❌ Business Manager withdrawal approval failed:",
+        error.stack || error.message
+      );
+
+      return res.status(400).json({
+        success: false,
+        code: "BUSINESS_MANAGER_WITHDRAWAL_APPROVAL_FAILED",
+        message:
+          error.message ||
+          "Unable to approve this withdrawal.",
+      });
+    }
+  }
+);
+
+// ------------------------------------------------------------
+// WITHDRAWAL REJECTION
+// Uses the existing restore/refund transaction inside the service.
+// ------------------------------------------------------------
+
+app.post(
+  `${API_PREFIX}/admin/business-manager/withdrawals/:withdrawalId/reject`,
+  requireBusinessManagerAdmin,
+  async (req, res) => {
+    try {
+      if (
+        !withdrawal ||
+        typeof withdrawal.rejectWithdrawal !==
+          "function"
+      ) {
+        return res.status(503).json({
+          success: false,
+          code: "WITHDRAWAL_SERVICE_UNAVAILABLE",
+          message: "Withdrawal service is unavailable.",
+        });
+      }
+
+      const withdrawalId =
+        String(
+          req.params.withdrawalId || ""
+        ).trim();
+
+      if (!withdrawalId) {
+        return res.status(400).json({
+          success: false,
+          code: "WITHDRAWAL_ID_REQUIRED",
+          message: "Withdrawal ID is required.",
+        });
+      }
+
+      const reason =
+        String(
+          req.body?.reason ||
+            req.body?.note ||
+            "Withdrawal rejected by Business Manager administrator."
+        )
+          .trim()
+          .substring(0, 500) ||
+        "Withdrawal rejected by Business Manager administrator.";
+
+      const result =
+        await withdrawal.rejectWithdrawal(
+          withdrawalId,
+          reason
+        );
+
+      return res.status(200).json({
+        success: true,
+        message: "Withdrawal rejected and funds restored.",
+        withdrawal: result,
+      });
+    } catch (error) {
+      console.error(
+        "❌ Business Manager withdrawal rejection failed:",
+        error.stack || error.message
+      );
+
+      return res.status(400).json({
+        success: false,
+        code: "BUSINESS_MANAGER_WITHDRAWAL_REJECTION_FAILED",
+        message:
+          error.message ||
+          "Unable to reject this withdrawal.",
+      });
+    }
+  }
+);
+
+// ------------------------------------------------------------
+// WITHDRAWAL TXID SUBMISSION
+// The existing service performs the blockchain verification.
+// No direct Firestore status mutation is performed here.
+// ------------------------------------------------------------
+
+app.post(
+  `${API_PREFIX}/admin/business-manager/withdrawals/:withdrawalId/txid`,
+  requireBusinessManagerAdmin,
+  async (req, res) => {
+    try {
+      if (
+        !withdrawal ||
+        typeof withdrawal.submitWithdrawalTxid !==
+          "function"
+      ) {
+        return res.status(503).json({
+          success: false,
+          code: "WITHDRAWAL_SERVICE_UNAVAILABLE",
+          message: "Withdrawal service is unavailable.",
+        });
+      }
+
+      const withdrawalId =
+        String(
+          req.params.withdrawalId || ""
+        ).trim();
+
+      const txid =
+        String(
+          req.body?.txid ||
+            req.body?.transactionId ||
+            ""
+        ).trim();
+
+      if (!withdrawalId) {
+        return res.status(400).json({
+          success: false,
+          code: "WITHDRAWAL_ID_REQUIRED",
+          message: "Withdrawal ID is required.",
+        });
+      }
+
+      if (!txid) {
+        return res.status(400).json({
+          success: false,
+          code: "TXID_REQUIRED",
+          message: "Transaction TXID is required.",
+        });
+      }
+
+      const adminIdentity = {
+        id: "BUSINESS_MANAGER",
+        username: "Kendrick Saint",
+      };
+
+      const result =
+        await withdrawal.submitWithdrawalTxid(
+          withdrawalId,
+          txid,
+          adminIdentity
+        );
+
+      return res.status(200).json({
+        success: true,
+        message:
+          result?.status === "COMPLETED"
+            ? "TXID verified and withdrawal completed."
+            : "TXID submitted for withdrawal verification.",
+        withdrawal: result,
+      });
+    } catch (error) {
+      console.error(
+        "❌ Business Manager withdrawal TXID submission failed:",
+        error.stack || error.message
+      );
+
+      return res.status(400).json({
+        success: false,
+        code: "BUSINESS_MANAGER_WITHDRAWAL_TXID_FAILED",
+        message:
+          error.message ||
+          "Unable to submit the withdrawal TXID.",
+      });
+    }
+  }
+);
+
+// ============================================================
 // 34. DEPOSIT MONITOR STATE
 // ============================================================
 
