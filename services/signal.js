@@ -302,6 +302,50 @@ function getPayoutForCapital(
 }
 
 // ============================================================
+// GET USER QUALIFYING CAPITAL
+// ============================================================
+//
+// qualifying_capital is the authoritative tier field.
+// locked_principal is the compatibility fallback for existing
+// accounts that do not have qualifying_capital yet.
+//
+// IMPORTANT:
+// Current balance and earned profit are NOT used to upgrade a
+// user's payout tier. A $100 account remains on the $2 tier even
+// after its balance grows above $200 from signal profits.
+// ============================================================
+
+function getUserQualifyingCapital(
+  userData
+) {
+  const explicitCapital =
+    parseFloat(
+      userData?.qualifying_capital
+    );
+
+  if (
+    Number.isFinite(
+      explicitCapital
+    ) &&
+    explicitCapital >= 0
+  ) {
+    return explicitCapital;
+  }
+
+  const lockedPrincipal =
+    parseFloat(
+      userData?.locked_principal ||
+        0
+    );
+
+  return Number.isFinite(
+    lockedPrincipal
+  )
+    ? Math.max(0, lockedPrincipal)
+    : 0;
+}
+
+// ============================================================
 // CHECK ACCOUNT FREEZE
 // ============================================================
 //
@@ -660,6 +704,42 @@ async function getSignals(
       50
     );
 
+  // Signals are shared, but the payout amount is user-specific.
+  // Resolve the authenticated user's qualifying capital once for
+  // this response so the Flutter signal screen does not display a
+  // misleading global/default profit amount.
+  let userTierReward = null;
+  if (userId) {
+    const cleanUserId =
+      validateUserId(userId);
+    const userSnapshot =
+      await db
+        .collection("users")
+        .doc(cleanUserId)
+        .get();
+
+    if (userSnapshot.exists) {
+      const userData =
+        userSnapshot.data() || {};
+      const qualifyingCapital =
+        getUserQualifyingCapital(
+          userData
+        );
+      const tierReward =
+        getPayoutForCapital(
+          qualifyingCapital
+        );
+
+      if (tierReward > 0) {
+        userTierReward =
+          roundMoney(
+            tierReward,
+            4
+          );
+      }
+    }
+  }
+
   const snapshot =
     await db
       .collection("signals")
@@ -715,7 +795,10 @@ async function getSignals(
         data.code ||
         doc.id,
 
+      // Never expose the signal's global/default profit when an
+      // authenticated user has a qualifying capital tier.
       profit:
+        userTierReward ??
         roundMoney(
           data.profit ??
             data.profitGenerated ??
@@ -794,7 +877,8 @@ async function getUserSignals(
 // ============================================================
 
 async function getSignalStatus(
-  signalCode
+  signalCode,
+  userId = null
 ) {
   const cleanCode =
     normalizeSignalCode(
@@ -835,6 +919,47 @@ async function getSignalStatus(
     data,
   } = result;
 
+  let statusProfit =
+    roundMoney(
+      data.profit ??
+        data.profitGenerated ??
+        0,
+      4
+    );
+
+  if (userId) {
+    const db =
+      getFirestoreInstance();
+    const cleanUserId =
+      validateUserId(userId);
+    const userSnapshot =
+      await db
+        .collection("users")
+        .doc(cleanUserId)
+        .get();
+
+    if (userSnapshot.exists) {
+      const userData =
+        userSnapshot.data() || {};
+      const qualifyingCapital =
+        getUserQualifyingCapital(
+          userData
+        );
+      const tierReward =
+        getPayoutForCapital(
+          qualifyingCapital
+        );
+
+      if (tierReward > 0) {
+        statusProfit =
+          roundMoney(
+            tierReward,
+            4
+          );
+      }
+    }
+  }
+
   const expiresAt =
     getSignalExpiry(
       data
@@ -873,12 +998,7 @@ async function getSignalStatus(
       cleanCode,
 
     profit:
-      roundMoney(
-        data.profit ??
-          data.profitGenerated ??
-          0,
-        4
-      ),
+      statusProfit,
 
     symbol:
       data.symbol ||
@@ -1241,56 +1361,41 @@ async function redeemSignal(
         }
 
         // ----------------------------------------------------
-        // REWARD
+        // USER-SPECIFIC REWARD
         // ----------------------------------------------------
         //
-        // PRIMARY SOURCE:
+        // The signal may carry a global/default profit value, but
+        // it MUST NOT determine this user's payout.
         //
-        // firebase_manager.js
-        // stores signal.profit
+        // Qualification is based on qualifying_capital, with
+        // locked_principal as the compatibility fallback.
+        // Current balance and earned signal profit never promote
+        // a user to a higher tier.
         //
-        // FALLBACK:
-        //
-        // Older signal records may contain
-        // profitGenerated.
-        //
-        // LAST FALLBACK:
-        //
-        // payout tier.
+        // $100-$199.99  -> $2
+        // $200-$499.99  -> $3
+        // $500+         -> $4
         // ----------------------------------------------------
 
-        const storedProfit =
-          parseFloat(
-            signalData.profit
+        const qualifyingCapital =
+          getUserQualifyingCapital(
+            userData
           );
 
-        const generatedProfit =
-          parseFloat(
-            signalData.profitGenerated
+        rewardAmount =
+          roundMoney(
+            getPayoutForCapital(
+              qualifyingCapital
+            ),
+            4
           );
 
         if (
-          Number.isFinite(
-            storedProfit
-          ) &&
-          storedProfit > 0
+          rewardAmount <= 0
         ) {
-          rewardAmount =
-            roundMoney(
-              storedProfit,
-              4
-            );
-        } else if (
-          Number.isFinite(
-            generatedProfit
-          ) &&
-          generatedProfit > 0
-        ) {
-          rewardAmount =
-            roundMoney(
-              generatedProfit,
-              4
-            );
+          throw new Error(
+            "CAPITAL_NOT_QUALIFIED"
+          );
         }
 
         // ----------------------------------------------------
@@ -1318,35 +1423,6 @@ async function redeemSignal(
         // LOCKED / QUALIFYING CAPITAL
         // ----------------------------------------------------
 
-        const lockedPrincipal =
-          parseFloat(
-            userData.locked_principal ||
-              0
-          );
-
-        // ----------------------------------------------------
-        // FALLBACK PAYOUT
-        // ----------------------------------------------------
-
-        if (
-          rewardAmount <= 0
-        ) {
-          rewardAmount =
-            roundMoney(
-              getPayoutForCapital(
-                lockedPrincipal
-              ),
-              4
-            );
-        }
-
-        if (
-          rewardAmount <= 0
-        ) {
-          throw new Error(
-            "CAPITAL_NOT_QUALIFIED"
-          );
-        }
 
         // ----------------------------------------------------
         // MINIMUM CAPITAL / BALANCE
@@ -1366,13 +1442,19 @@ async function redeemSignal(
         }
 
         // ----------------------------------------------------
-        // IF locked_principal IS USED FOR QUALIFICATION,
-        // ALSO ENSURE THE USER MEETS THE REQUIRED CAPITAL.
+        // QUALIFYING CAPITAL CHECK
+        // ----------------------------------------------------
+        // Use the same authoritative qualifying capital that
+        // determined the user's payout tier above.
+        //
+        // This avoids relying on an undefined/local
+        // lockedPrincipal variable and keeps the qualification
+        // check consistent with the payout calculation.
         // ----------------------------------------------------
 
         if (
-          lockedPrincipal > 0 &&
-          lockedPrincipal <
+          qualifyingCapital > 0 &&
+          qualifyingCapital <
             PAYOUT_MINIMUM_CAPITAL
         ) {
           throw new Error(
@@ -1605,6 +1687,18 @@ async function redeemSignal(
               null,
 
             signalProfit:
+              roundMoney(
+                rewardAmount,
+                4
+              ),
+
+            qualifyingCapital:
+              roundMoney(
+                qualifyingCapital,
+                4
+              ),
+
+            payoutTier:
               roundMoney(
                 rewardAmount,
                 4

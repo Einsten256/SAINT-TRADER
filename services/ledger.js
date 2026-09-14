@@ -357,6 +357,35 @@ async function creditDepositToLedger(
             0
         );
 
+      // --------------------------------------------------------
+      // QUALIFYING CAPITAL / PAYOUT TIER
+      // --------------------------------------------------------
+      // Preserve the user's qualifying starting capital.
+      // Later deposits do not upgrade the payout tier.
+      // Signal profits do not upgrade the payout tier.
+      // Legacy users without the field use existing locked
+      // principal as their initial qualifying capital.
+      // --------------------------------------------------------
+
+      const existingQualifyingCapital =
+        Number(
+          user.qualifying_capital
+        );
+
+      const qualifyingCapital =
+        Number.isFinite(
+          existingQualifyingCapital
+        ) &&
+        existingQualifyingCapital >= 0
+          ? roundMoney(
+              existingQualifyingCapital
+            )
+          : locked > 0
+            ? roundMoney(
+                locked
+              )
+            : credit;
+
       const balances =
         balancesOf(user);
 
@@ -414,6 +443,9 @@ async function creditDepositToLedger(
 
           locked_principal:
             newLockedPrincipal,
+
+          qualifying_capital:
+            qualifyingCapital,
 
           balances,
 
