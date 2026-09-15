@@ -11,7 +11,7 @@
 // - Validate authenticated user
 // - Validate user's qualifying capital
 // - Redeem signal codes
-// - Queue Copy Trading settlement and atomically credit user at settlement
+// - Atomically credit user balance
 // - Update the user's trade balance
 // - Create signal redemption records
 //
@@ -103,13 +103,6 @@ const PAYOUT_TIER_500 = parseFloat(
 const PAYOUT_MINIMUM_CAPITAL = parseFloat(
   process.env.PAYOUT_MINIMUM_CAPITAL || "100"
 );
-
-// Copy Trading settlement is server-controlled.
-// The client never waits and credits its own balance.
-const COPY_TRADING_SETTLEMENT_MINUTES = 7;
-const COPY_TRADING_SETTLEMENT_MS =
-  COPY_TRADING_SETTLEMENT_MINUTES * 60 * 1000;
-const COPY_TRADING_SETTLEMENT_INTERVAL_MS = 30 * 1000;
 
 const SIGNAL_DEFAULT_SYMBOL =
   String(
@@ -299,50 +292,6 @@ function getPayoutForCapital(
   }
 
   return 0;
-}
-
-// ============================================================
-// GET USER QUALIFYING CAPITAL
-// ============================================================
-//
-// qualifying_capital is the authoritative tier field.
-// locked_principal is the compatibility fallback for existing
-// accounts that do not have qualifying_capital yet.
-//
-// IMPORTANT:
-// Current balance and earned profit are NOT used to upgrade a
-// user's payout tier. A $100 account remains on the $2 tier even
-// after its balance grows above $200 from signal profits.
-// ============================================================
-
-function getUserQualifyingCapital(
-  userData
-) {
-  const explicitCapital =
-    parseFloat(
-      userData?.qualifying_capital
-    );
-
-  if (
-    Number.isFinite(
-      explicitCapital
-    ) &&
-    explicitCapital >= 0
-  ) {
-    return explicitCapital;
-  }
-
-  const lockedPrincipal =
-    parseFloat(
-      userData?.locked_principal ||
-        0
-    );
-
-  return Number.isFinite(
-    lockedPrincipal
-  )
-    ? Math.max(0, lockedPrincipal)
-    : 0;
 }
 
 // ============================================================
@@ -704,42 +653,6 @@ async function getSignals(
       50
     );
 
-  // Signals are shared, but the payout amount is user-specific.
-  // Resolve the authenticated user's qualifying capital once for
-  // this response so the Flutter signal screen does not display a
-  // misleading global/default profit amount.
-  let userTierReward = null;
-  if (userId) {
-    const cleanUserId =
-      validateUserId(userId);
-    const userSnapshot =
-      await db
-        .collection("users")
-        .doc(cleanUserId)
-        .get();
-
-    if (userSnapshot.exists) {
-      const userData =
-        userSnapshot.data() || {};
-      const qualifyingCapital =
-        getUserQualifyingCapital(
-          userData
-        );
-      const tierReward =
-        getPayoutForCapital(
-          qualifyingCapital
-        );
-
-      if (tierReward > 0) {
-        userTierReward =
-          roundMoney(
-            tierReward,
-            4
-          );
-      }
-    }
-  }
-
   const snapshot =
     await db
       .collection("signals")
@@ -795,10 +708,7 @@ async function getSignals(
         data.code ||
         doc.id,
 
-      // Never expose the signal's global/default profit when an
-      // authenticated user has a qualifying capital tier.
       profit:
-        userTierReward ??
         roundMoney(
           data.profit ??
             data.profitGenerated ??
@@ -877,8 +787,7 @@ async function getUserSignals(
 // ============================================================
 
 async function getSignalStatus(
-  signalCode,
-  userId = null
+  signalCode
 ) {
   const cleanCode =
     normalizeSignalCode(
@@ -919,47 +828,6 @@ async function getSignalStatus(
     data,
   } = result;
 
-  let statusProfit =
-    roundMoney(
-      data.profit ??
-        data.profitGenerated ??
-        0,
-      4
-    );
-
-  if (userId) {
-    const db =
-      getFirestoreInstance();
-    const cleanUserId =
-      validateUserId(userId);
-    const userSnapshot =
-      await db
-        .collection("users")
-        .doc(cleanUserId)
-        .get();
-
-    if (userSnapshot.exists) {
-      const userData =
-        userSnapshot.data() || {};
-      const qualifyingCapital =
-        getUserQualifyingCapital(
-          userData
-        );
-      const tierReward =
-        getPayoutForCapital(
-          qualifyingCapital
-        );
-
-      if (tierReward > 0) {
-        statusProfit =
-          roundMoney(
-            tierReward,
-            4
-          );
-      }
-    }
-  }
-
   const expiresAt =
     getSignalExpiry(
       data
@@ -998,7 +866,12 @@ async function getSignalStatus(
       cleanCode,
 
     profit:
-      statusProfit,
+      roundMoney(
+        data.profit ??
+          data.profitGenerated ??
+          0,
+        4
+      ),
 
     symbol:
       data.symbol ||
@@ -1208,9 +1081,6 @@ async function redeemSignal(
 
   let signalProfit = 0;
 
-  let orderId = "";
-  let payoutAt = null;
-
   try {
     // ========================================================
     // ATOMIC TRANSACTION
@@ -1361,41 +1231,56 @@ async function redeemSignal(
         }
 
         // ----------------------------------------------------
-        // USER-SPECIFIC REWARD
+        // REWARD
         // ----------------------------------------------------
         //
-        // The signal may carry a global/default profit value, but
-        // it MUST NOT determine this user's payout.
+        // PRIMARY SOURCE:
         //
-        // Qualification is based on qualifying_capital, with
-        // locked_principal as the compatibility fallback.
-        // Current balance and earned signal profit never promote
-        // a user to a higher tier.
+        // firebase_manager.js
+        // stores signal.profit
         //
-        // $100-$199.99  -> $2
-        // $200-$499.99  -> $3
-        // $500+         -> $4
+        // FALLBACK:
+        //
+        // Older signal records may contain
+        // profitGenerated.
+        //
+        // LAST FALLBACK:
+        //
+        // payout tier.
         // ----------------------------------------------------
 
-        const qualifyingCapital =
-          getUserQualifyingCapital(
-            userData
+        const storedProfit =
+          parseFloat(
+            signalData.profit
           );
 
-        rewardAmount =
-          roundMoney(
-            getPayoutForCapital(
-              qualifyingCapital
-            ),
-            4
+        const generatedProfit =
+          parseFloat(
+            signalData.profitGenerated
           );
 
         if (
-          rewardAmount <= 0
+          Number.isFinite(
+            storedProfit
+          ) &&
+          storedProfit > 0
         ) {
-          throw new Error(
-            "CAPITAL_NOT_QUALIFIED"
-          );
+          rewardAmount =
+            roundMoney(
+              storedProfit,
+              4
+            );
+        } else if (
+          Number.isFinite(
+            generatedProfit
+          ) &&
+          generatedProfit > 0
+        ) {
+          rewardAmount =
+            roundMoney(
+              generatedProfit,
+              4
+            );
         }
 
         // ----------------------------------------------------
@@ -1423,6 +1308,35 @@ async function redeemSignal(
         // LOCKED / QUALIFYING CAPITAL
         // ----------------------------------------------------
 
+        const lockedPrincipal =
+          parseFloat(
+            userData.locked_principal ||
+              0
+          );
+
+        // ----------------------------------------------------
+        // FALLBACK PAYOUT
+        // ----------------------------------------------------
+
+        if (
+          rewardAmount <= 0
+        ) {
+          rewardAmount =
+            roundMoney(
+              getPayoutForCapital(
+                lockedPrincipal
+              ),
+              4
+            );
+        }
+
+        if (
+          rewardAmount <= 0
+        ) {
+          throw new Error(
+            "CAPITAL_NOT_QUALIFIED"
+          );
+        }
 
         // ----------------------------------------------------
         // MINIMUM CAPITAL / BALANCE
@@ -1442,19 +1356,13 @@ async function redeemSignal(
         }
 
         // ----------------------------------------------------
-        // QUALIFYING CAPITAL CHECK
-        // ----------------------------------------------------
-        // Use the same authoritative qualifying capital that
-        // determined the user's payout tier above.
-        //
-        // This avoids relying on an undefined/local
-        // lockedPrincipal variable and keeps the qualification
-        // check consistent with the payout calculation.
+        // IF locked_principal IS USED FOR QUALIFICATION,
+        // ALSO ENSURE THE USER MEETS THE REQUIRED CAPITAL.
         // ----------------------------------------------------
 
         if (
-          qualifyingCapital > 0 &&
-          qualifyingCapital <
+          lockedPrincipal > 0 &&
+          lockedPrincipal <
             PAYOUT_MINIMUM_CAPITAL
         ) {
           throw new Error(
@@ -1523,140 +1431,76 @@ async function redeemSignal(
         }
 
         // ----------------------------------------------------
+        // UPDATED BALANCES
         // ----------------------------------------------------
-        // CREATE COPY TRADING ORDER
+
+        newBalance =
+          roundMoney(
+            oldBalance +
+              rewardAmount,
+            4
+          );
+
+        newTradeBalance =
+          roundMoney(
+            oldTradeBalance +
+              rewardAmount,
+            4
+          );
+
+        // ----------------------------------------------------
+        // KEEP EXCHANGE BALANCE CONSISTENT
+        // ----------------------------------------------------
         //
         // IMPORTANT:
-        // The user's balance is NOT changed here.
-        // The order remains PENDING until the server settlement
-        // processor reaches payoutAt (approximately 7 minutes).
+        //
+        // Signal reward is credited to trade.
+        //
+        // usdt_balance is the primary overall balance.
+        //
+        // Therefore:
+        //
+        // usdt_balance += reward
+        // balances.trade += reward
+        //
+        // balances.exchange is NOT increased separately,
+        // otherwise the internal account totals would double
+        // count the reward.
         // ----------------------------------------------------
 
-        orderId =
-          db.collection("copy_trading_orders")
-            .doc().id;
+        balances.trade =
+          newTradeBalance;
 
-        const globalOrderRef =
-          db.collection("copy_trading_orders")
-            .doc(orderId);
+        // ----------------------------------------------------
+        // UPDATE USER
+        // ----------------------------------------------------
 
-        const userOrderRef =
-          userRef.collection("orders")
-            .doc(orderId);
-
-        const payoutAtMs =
-          Date.now() +
-          COPY_TRADING_SETTLEMENT_MS;
-
-        payoutAt =
-          new Date(payoutAtMs);
-
-        transaction.set(
-          globalOrderRef,
+        transaction.update(
+          userRef,
           {
-            orderId,
-            userId:
-              cleanUserId,
-            user_id:
-              cleanUserId,
-            code:
+            usdt_balance:
+              newBalance,
+
+            balances,
+
+            last_signal_reward:
+              rewardAmount,
+
+            last_signal_code:
               cleanCode,
-            type:
-              "COPY_TRADING",
-            pair:
-              signalData.symbol ||
-              SIGNAL_DEFAULT_SYMBOL,
-            symbol:
-              signalData.symbol ||
-              SIGNAL_DEFAULT_SYMBOL,
-            session:
-              signalData.session ||
-              null,
-            amount:
-              roundMoney(
-                rewardAmount,
-                4
-              ),
-            profit:
-              roundMoney(
-                rewardAmount,
-                4
-              ),
-            reward:
-              roundMoney(
-                rewardAmount,
-                4
-              ),
-            rateOfReturn:
-              "SETTLEMENT",
-            source:
-              "signal",
-            status:
-              "PENDING",
-            settlementStatus:
-              "PENDING",
-            createdAt:
+
+            last_signal_at:
               FieldValue.serverTimestamp(),
-            acceptedAt:
+
+            last_updated:
               FieldValue.serverTimestamp(),
-            payoutAt:
-              payoutAt,
           }
         );
 
-        transaction.set(
-          userOrderRef,
-          {
-            orderId,
-            userId:
-              cleanUserId,
-            code:
-              cleanCode,
-            type:
-              "COPY_TRADING",
-            pair:
-              signalData.symbol ||
-              SIGNAL_DEFAULT_SYMBOL,
-            symbol:
-              signalData.symbol ||
-              SIGNAL_DEFAULT_SYMBOL,
-            session:
-              signalData.session ||
-              null,
-            amount:
-              roundMoney(
-                rewardAmount,
-                4
-              ),
-            profit:
-              roundMoney(
-                rewardAmount,
-                4
-              ),
-            reward:
-              roundMoney(
-                rewardAmount,
-                4
-              ),
-            rateOfReturn:
-              "SETTLEMENT",
-            source:
-              "signal",
-            status:
-              "PENDING",
-            settlementStatus:
-              "PENDING",
-            createdAt:
-              FieldValue.serverTimestamp(),
-            acceptedAt:
-              FieldValue.serverTimestamp(),
-            payoutAt:
-              payoutAt,
-          }
-        );
+        // ----------------------------------------------------
+        // CREATE REDEMPTION RECORD
+        // ----------------------------------------------------
 
-        // The unique redemption document reserves the code immediately,
-        // preventing duplicate Copy Trading orders for the same user/code.
         transaction.set(
           redemptionRef,
           {
@@ -1673,10 +1517,7 @@ async function redeemSignal(
               cleanCode,
 
             reward:
-              roundMoney(
-                rewardAmount,
-                4
-              ),
+              rewardAmount,
 
             symbol:
               signalData.symbol ||
@@ -1687,51 +1528,67 @@ async function redeemSignal(
               null,
 
             signalProfit:
-              roundMoney(
-                rewardAmount,
-                4
-              ),
-
-            qualifyingCapital:
-              roundMoney(
-                qualifyingCapital,
-                4
-              ),
-
-            payoutTier:
-              roundMoney(
-                rewardAmount,
-                4
-              ),
+              rewardAmount,
 
             balanceBefore:
               oldBalance,
 
             balanceAfter:
-              oldBalance,
+              newBalance,
+
+            tradeBalanceBefore:
+              oldTradeBalance,
+
+            tradeBalanceAfter:
+              newTradeBalance,
 
             source:
               "signal",
 
-            orderId,
-
             status:
-              "PENDING",
+              "completed",
 
-            acceptedAt:
+            redeemedAt:
               FieldValue.serverTimestamp(),
-
-            payoutAt:
-              payoutAt,
 
             createdAt:
               FieldValue.serverTimestamp(),
           }
         );
 
-        // One signal code is shared by eligible users.
-        // The user/code redemption record prevents this user from
-        // submitting the same code more than once.
+        // ----------------------------------------------------
+        // MARK SIGNAL AS REDEEMED
+        // ----------------------------------------------------
+
+        transaction.update(
+          signalRef,
+          {
+            active:
+              false,
+
+            isRedeemed:
+              true,
+
+            status:
+              "REDEEMED",
+
+            redeemedBy:
+              cleanUserId,
+
+            redeemedReward:
+              rewardAmount,
+
+            redeemedAt:
+              FieldValue.serverTimestamp(),
+
+            updated_at:
+              FieldValue.serverTimestamp(),
+          }
+        );
+
+        // ----------------------------------------------------
+        // RETURN SIGNAL INFORMATION
+        // ----------------------------------------------------
 
         signalSymbol =
           signalData.symbol ||
@@ -1743,23 +1600,18 @@ async function redeemSignal(
 
         signalProfit =
           rewardAmount;
-
-        // Balance is unchanged until settlement.
-        newBalance =
-          oldBalance;
-
-        newTradeBalance =
-          oldTradeBalance;
       }
     );
 
     // ========================================================
-    // RTDB STATUS SYNC
+    // RTDB USER SYNC
     // ========================================================
     //
-    // Firestore remains authoritative.
-    // The balance is intentionally unchanged until settlement.
-    // Flutter can use this status to show that the order is pending.
+    // Firestore is authoritative.
+    //
+    // RTDB is synchronized for Flutter.
+    //
+    // Failure here does NOT reverse the Firestore transaction.
     // ========================================================
 
     const rtdb =
@@ -1772,52 +1624,52 @@ async function redeemSignal(
             `users/${cleanUserId}`
           )
           .update({
+            usdt_balance:
+              newBalance,
+
             last_signal_reward:
               rewardAmount,
 
             last_signal_code:
               cleanCode,
 
-            last_signal_status:
-              "PENDING_SETTLEMENT",
-
-            last_signal_payout_at:
-              payoutAt
-                ? payoutAt.toISOString()
-                : null,
+            last_signal_at:
+              Date.now(),
 
             last_updated:
               Date.now(),
           });
       } catch (rtdbError) {
         console.error(
-          `⚠️ Copy Trading order accepted but RTDB status sync failed for ${cleanUserId}:`,
+          `⚠️ Firestore signal redemption succeeded but RTDB sync failed for ${cleanUserId}:`,
           rtdbError.message
         );
       }
     }
 
     // ========================================================
-    // COPY TRADING ACCEPTED
+    // SUCCESS
     // ========================================================
 
     console.log(
-      `Copy Trading order accepted for ${cleanUserId}: ${cleanCode} | Settlement in ${COPY_TRADING_SETTLEMENT_MINUTES} minutes | Order ${orderId}`
+      `💰 Signal ${cleanCode} redeemed by ${cleanUserId}: +$${rewardAmount.toFixed(
+        2
+      )}`
     );
 
     return {
       success: true,
 
       status:
-        "PENDING_SETTLEMENT",
+        "REDEEMED",
 
       message:
-        `Copy Trading order accepted. Settlement will be completed in approximately ${COPY_TRADING_SETTLEMENT_MINUTES} minutes.`,
+        `Claimed $${rewardAmount.toFixed(
+          2
+        )} USDT successfully.`,
 
       code:
         cleanCode,
-
-      orderId,
 
       reward:
         roundMoney(
@@ -1827,17 +1679,9 @@ async function redeemSignal(
 
       new_balance:
         roundMoney(
-          oldBalance,
+          newBalance,
           4
         ),
-
-      payoutAt:
-        payoutAt
-          ? payoutAt.toISOString()
-          : null,
-
-      settlementMinutes:
-        COPY_TRADING_SETTLEMENT_MINUTES,
 
       symbol:
         signalSymbol,
@@ -1845,7 +1689,6 @@ async function redeemSignal(
       session:
         signalSession,
     };
-
   } catch (error) {
     // ========================================================
     // EXPECTED ERRORS
@@ -1884,7 +1727,7 @@ async function redeemSignal(
             "ALREADY_REDEEMED",
 
           message:
-            "This Copy Trading Code has already been submitted for settlement.",
+            "Signal code has already been redeemed.",
         };
 
       case "SIGNAL_INACTIVE":
@@ -1992,419 +1835,6 @@ async function redeemSignal(
     }
   }
 }
-
-
-// ============================================================
-// COPY TRADING SETTLEMENT PROCESSOR
-//
-// Pending Copy Trading orders are settled by the server.
-// The Flutter client cannot accelerate, cancel, or self-credit
-// the payout by changing a local timer.
-// ============================================================
-
-async function settlePendingCopyTradingOrders() {
-  const db = getFirestoreInstance();
-
-  const snapshot = await db
-    .collection("copy_trading_orders")
-    .where("status", "==", "PENDING")
-    .limit(100)
-    .get();
-
-  if (snapshot.empty) {
-    return;
-  }
-
-  const now = Date.now();
-
-  for (const orderDoc of snapshot.docs) {
-    try {
-      const orderData = orderDoc.data() || {};
-      const payoutAtValue = orderData.payoutAt;
-
-      let payoutAtMs = 0;
-
-      if (
-        payoutAtValue &&
-        typeof payoutAtValue.toDate === "function"
-      ) {
-        payoutAtMs = payoutAtValue
-          .toDate()
-          .getTime();
-      } else if (payoutAtValue instanceof Date) {
-        payoutAtMs = payoutAtValue.getTime();
-      } else if (typeof payoutAtValue === "string") {
-        const parsed = Date.parse(payoutAtValue);
-        payoutAtMs = Number.isFinite(parsed) ? parsed : 0;
-      } else if (typeof payoutAtValue === "number") {
-        payoutAtMs = payoutAtValue;
-      }
-
-      if (!payoutAtMs || payoutAtMs > now) {
-        continue;
-      }
-
-      const orderRef = orderDoc.ref;
-      const userId =
-        String(
-          orderData.userId ||
-          orderData.user_id ||
-          ""
-        ).trim();
-
-      const code =
-        String(
-          orderData.code ||
-          ""
-        ).trim()
-        .toUpperCase();
-
-      if (!userId || !code) {
-        continue;
-      }
-
-      const userRef =
-        db.collection("users").doc(userId);
-
-      const userOrderRef =
-        userRef
-          .collection("orders")
-          .doc(orderDoc.id);
-
-      const redemptionRef =
-        db.collection("signal_redemptions")
-          .doc(`${userId}_${code}`);
-
-      let settlement = null;
-
-      await db.runTransaction(
-        async (transaction) => {
-          const freshOrder =
-            await transaction.get(orderRef);
-
-          if (!freshOrder.exists) {
-            return;
-          }
-
-          const freshOrderData =
-            freshOrder.data() || {};
-
-          if (
-            String(
-              freshOrderData.status || ""
-            ).toUpperCase() !== "PENDING"
-          ) {
-            return;
-          }
-
-          const freshUser =
-            await transaction.get(userRef);
-
-          if (!freshUser.exists) {
-            throw new Error("USER_NOT_FOUND");
-          }
-
-          const userData =
-            freshUser.data() || {};
-
-          const oldBalance =
-            Number(
-              userData.usdt_balance || 0
-            );
-
-          const rewardAmount =
-            roundMoney(
-              Number(
-                freshOrderData.reward ||
-                freshOrderData.profit ||
-                freshOrderData.amount ||
-                0
-              ),
-              4
-            );
-
-          if (
-            !Number.isFinite(oldBalance) ||
-            oldBalance < 0
-          ) {
-            throw new Error(
-              "INVALID_BALANCE"
-            );
-          }
-
-          if (
-            !Number.isFinite(rewardAmount) ||
-            rewardAmount <= 0
-          ) {
-            throw new Error(
-              "INVALID_SETTLEMENT_AMOUNT"
-            );
-          }
-
-          const balances = {
-            ...(userData.balances || {}),
-          };
-
-          if (
-            balances.exchange === undefined
-          ) {
-            balances.exchange =
-              oldBalance;
-          }
-
-          if (
-            balances.trade === undefined
-          ) {
-            balances.trade = 0;
-          }
-
-          if (
-            balances.perpetual === undefined
-          ) {
-            balances.perpetual = 0;
-          }
-
-          if (
-            balances.withdraw === undefined
-          ) {
-            balances.withdraw = 0;
-          }
-
-          const oldTradeBalance =
-            Number(
-              balances.trade || 0
-            );
-
-          const newBalance =
-            roundMoney(
-              oldBalance +
-              rewardAmount,
-              4
-            );
-
-          const newTradeBalance =
-            roundMoney(
-              oldTradeBalance +
-              rewardAmount,
-              4
-            );
-
-          balances.trade =
-            newTradeBalance;
-
-          const completedAt =
-            FieldValue.serverTimestamp();
-
-          transaction.update(
-            userRef,
-            {
-              usdt_balance:
-                newBalance,
-
-              balances,
-
-              last_signal_reward:
-                rewardAmount,
-
-              last_signal_code:
-                code,
-
-              last_signal_status:
-                "COMPLETED",
-
-              last_signal_at:
-                completedAt,
-
-              last_updated:
-                completedAt,
-            }
-          );
-
-          transaction.set(
-            orderRef,
-            {
-              status:
-                "COMPLETED",
-
-              settlementStatus:
-                "COMPLETED",
-
-              balanceBefore:
-                oldBalance,
-
-              balanceAfter:
-                newBalance,
-
-              tradeBalanceBefore:
-                oldTradeBalance,
-
-              tradeBalanceAfter:
-                newTradeBalance,
-
-              completedAt,
-
-              updatedAt:
-                completedAt,
-            },
-            {
-              merge: true,
-            }
-          );
-
-          transaction.set(
-            userOrderRef,
-            {
-              status:
-                "COMPLETED",
-
-              settlementStatus:
-                "COMPLETED",
-
-              balanceBefore:
-                oldBalance,
-
-              balanceAfter:
-                newBalance,
-
-              tradeBalanceBefore:
-                oldTradeBalance,
-
-              tradeBalanceAfter:
-                newTradeBalance,
-
-              completedAt,
-
-              updatedAt:
-                completedAt,
-            },
-            {
-              merge: true,
-            }
-          );
-
-          transaction.set(
-            redemptionRef,
-            {
-              status:
-                "COMPLETED",
-
-              redeemedAt:
-                completedAt,
-
-              settledAt:
-                completedAt,
-
-              balanceBefore:
-                oldBalance,
-
-              balanceAfter:
-                newBalance,
-
-              tradeBalanceBefore:
-                oldTradeBalance,
-
-              tradeBalanceAfter:
-                newTradeBalance,
-
-              updatedAt:
-                completedAt,
-            },
-            {
-              merge: true,
-            }
-          );
-
-          settlement = {
-            rewardAmount,
-            newBalance,
-          };
-        }
-      );
-
-      if (
-        settlement &&
-        realtimeDatabase
-      ) {
-        try {
-          await realtimeDatabase
-            .ref(
-              `users/${userId}`
-            )
-            .update({
-              usdt_balance:
-                settlement.newBalance,
-
-              last_signal_reward:
-                settlement.rewardAmount,
-
-              last_signal_code:
-                code,
-
-              last_signal_status:
-                "COMPLETED",
-
-              last_signal_at:
-                Date.now(),
-
-              last_updated:
-                Date.now(),
-            });
-        } catch (rtdbError) {
-          console.error(
-            `⚠️ Copy Trading settlement completed in Firestore but RTDB sync failed for ${userId}:`,
-            rtdbError.message
-          );
-        }
-
-        console.log(
-          `Copy Trading settlement completed for ${userId}: ${code} +$${settlement.rewardAmount.toFixed(2)} USDT`
-        );
-      }
-    } catch (error) {
-      console.error(
-        `⚠️ Copy Trading settlement failed for order ${orderDoc.id}:`,
-        error.message || error
-      );
-    }
-  }
-}
-
-let copyTradingSettlementProcessorStarted = false;
-
-function startCopyTradingSettlementProcessor() {
-  if (copyTradingSettlementProcessorStarted) {
-    return;
-  }
-
-  copyTradingSettlementProcessorStarted = true;
-
-  setInterval(
-    () => {
-      settlePendingCopyTradingOrders()
-        .catch((error) => {
-          console.error(
-            "⚠️ Copy Trading settlement processor error:",
-            error.message || error
-          );
-        });
-    },
-    COPY_TRADING_SETTLEMENT_INTERVAL_MS
-  );
-
-  settlePendingCopyTradingOrders()
-    .catch((error) => {
-      console.error(
-        "⚠️ Initial Copy Trading settlement scan failed:",
-        error.message || error
-      );
-    });
-
-  console.log(
-    `Copy Trading settlement processor started. Interval: ${COPY_TRADING_SETTLEMENT_INTERVAL_MS / 1000}s`
-  );
-}
-
-startCopyTradingSettlementProcessor();
 
 // ============================================================
 // COMPATIBILITY ALIASES
