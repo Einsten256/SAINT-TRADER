@@ -1592,24 +1592,130 @@ mountRoute(
 );
 
 // New Mobile Money recharge routes.
-mountRoute(
-  "./services/routes/deposits",
-  "Mobile Money Deposits",
-  "/deposits"
-);
+//
+// deposits.js exports createRouter(routeDeps) and its paths are
+// relative (/config, /submit, /history, etc.). Therefore it must
+// be mounted explicitly under /api/deposits.
+try {
+  const depositsRouter =
+    require("./services/routes/deposits").createRouter(
+      routeDeps
+    );
+
+  if (
+    !depositsRouter ||
+    typeof depositsRouter.use !== "function"
+  ) {
+    throw new Error(
+      "Mobile Money Deposits returned an invalid Express router."
+    );
+  }
+
+  app.use(
+    `${API_PREFIX}/deposits`,
+    depositsRouter
+  );
+
+  console.log(
+    `✅ Route loaded: Mobile Money Deposits -> ${API_PREFIX}/deposits`
+  );
+} catch (error) {
+  console.error(
+    "❌ Failed to load Mobile Money Deposits:",
+    error.stack || error.message
+  );
+}
 
 // New daily signal routes.
-mountRoute(
-  "./services/routes/signal",
-  "Signals",
-  "/signals"
-);
+//
+// signal.js exports createRouter(routeDeps) and its paths are
+// relative (/active, /status, /redeem, etc.). Therefore it must
+// be mounted explicitly under /api/signals.
+try {
+  const signalsRouter =
+    require("./services/routes/signal").createRouter(
+      routeDeps
+    );
+
+  if (
+    !signalsRouter ||
+    typeof signalsRouter.use !== "function"
+  ) {
+    throw new Error(
+      "Signals returned an invalid Express router."
+    );
+  }
+
+  app.use(
+    `${API_PREFIX}/signals`,
+    signalsRouter
+  );
+
+  console.log(
+    `✅ Route loaded: Signals -> ${API_PREFIX}/signals`
+  );
+} catch (error) {
+  console.error(
+    "❌ Failed to load Signals:",
+    error.stack || error.message
+  );
+}
 
 // New Mobile Money withdrawal routes.
+//
+// KEEP mountRoute() here. The current withdrawal route module
+// already owns its /api/withdrawals/... paths.
 mountRoute(
   "./services/routes/withdrawal",
   "Withdrawals",
   "/withdrawals"
+);
+
+// Authenticated ledger balance endpoint.
+//
+// Flutter calls GET /api/balance. This endpoint uses the new
+// Saint Crypto ledger and returns locked trading capital plus
+// withdrawable payout balance.
+app.get(
+  `${API_PREFIX}/balance`,
+  verifyAuth,
+  verifyFirestore,
+  async (req, res) => {
+    try {
+      if (
+        !ledger ||
+        typeof ledger.getBalance !== "function"
+      ) {
+        return res.status(503).json({
+          success: false,
+          code: "LEDGER_UNAVAILABLE",
+          message: "Ledger service is unavailable.",
+        });
+      }
+
+      const result =
+        await ledger.getBalance(req.uid);
+
+      return res.status(200).json(
+        result
+      );
+    } catch (error) {
+      console.error(
+        "❌ Balance request failed:",
+        error.stack || error.message
+      );
+
+      return res.status(500).json({
+        success: false,
+        code: "BALANCE_FETCH_FAILED",
+        message:
+          NODE_ENV === "production"
+            ? "Unable to load account balance."
+            : error.message ||
+              "Unable to load account balance.",
+      });
+    }
+  }
 );
 
 // Compatibility withdrawal identity routes.
