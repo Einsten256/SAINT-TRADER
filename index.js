@@ -1554,6 +1554,25 @@ function mountRoute(
 }
 
 // ============================================================
+// PUBLIC SYSTEM ENDPOINTS
+// MUST COME BEFORE AUTHENTICATED ROUTERS
+// ============================================================
+
+app.get("/", (req, res) => {
+  return res.status(200).json({
+    success: true,
+    service: SERVICE_NAME,
+    status: "ONLINE",
+    message: "Saint Crypto Trade Engine is online.",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/health", healthHandler);
+
+app.get(`${API_PREFIX}/health`, healthHandler);
+
+// ============================================================
 // 27. ROUTES
 // ============================================================
 
