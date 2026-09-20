@@ -1,366 +1,227 @@
-// ============================================================
-// SAINT CRYPTO — AUTH / FUND PIN ROUTES
-// ============================================================
+/**
+ * SAINT CRYPTO
+ * services/routes/auth.js
+ *
+ * RESTORED AUTH ROUTE
+ *
+ * Destination:
+ * D:\BACKEND\services\routes\auth.js
+ *
+ * IMPORTANT:
+ * The existing Saint Crypto authentication middleware is owned by index.js
+ * and is passed into this router through createRouter(routeDeps).
+ *
+ * Do NOT require ../auth here. There is no services/auth.js in the current
+ * backend architecture. The previous compatibility wrapper caused the
+ * startup warning:
+ *
+ *   Cannot find module '../auth'
+ *
+ * This file restores the original createRouter contract and keeps the
+ * existing authentication/fund-password behavior intact.
+ */
+
+"use strict";
 
 const express = require("express");
-const bcrypt = require("bcryptjs");
-const { FieldValue } = require("firebase-admin/firestore");
 
-// ============================================================
-// ROUTER FACTORY
-// ============================================================
+function createRouter(routeDeps = {}) {
+  const {
+    verifyAuth,
+    verifyFirestore,
+    strictLimiter,
+    services = {},
+  } = routeDeps;
 
-function createRouter({
-  firestore,
-  verifyAuth,
-  strictLimiter,
-}) {
   const router = express.Router();
+  const kendrick = services.kendrick;
 
-  // ==========================================================
-  // HELPERS
-  // ==========================================================
+  if (!kendrick) {
+    router.use((req, res) => {
+      return res.status(500).json({
+        success: false,
+        error: "KENDRICK_SERVICE_NOT_AVAILABLE",
+        message: "Authentication support service is unavailable.",
+      });
+    });
 
-  function getUserRef(userId) {
-    return firestore.collection("users").doc(userId);
+    return router;
   }
 
-  function validatePin(pin) {
-    return /^\d{6}$/.test(String(pin || ""));
+  if (
+    typeof verifyAuth !== "function" ||
+    typeof verifyFirestore !== "function"
+  ) {
+    router.use((req, res) => {
+      return res.status(500).json({
+        success: false,
+        error: "AUTH_MIDDLEWARE_NOT_AVAILABLE",
+        message: "Authentication middleware is unavailable.",
+      });
+    });
+
+    return router;
   }
 
-  // ==========================================================
-  // SET FUND PIN
-  // ==========================================================
+  const limiter =
+    typeof strictLimiter === "function"
+      ? strictLimiter
+      : (req, res, next) => next();
 
+  // ------------------------------------------------------------
+  // SET FUND PASSWORD
+  // ------------------------------------------------------------
   router.post(
     "/api/user/set-fund-password",
-    strictLimiter,
     verifyAuth,
+    limiter,
+    verifyFirestore,
     async (req, res) => {
       try {
-        const { newPassword } = req.body || {};
-        const userId = req.uid;
+        const firestore =
+          typeof kendrick.getFirestore === "function"
+            ? kendrick.getFirestore()
+            : null;
 
-        if (!validatePin(newPassword)) {
-          return res.status(400).json({
+        if (!firestore) {
+          return res.status(500).json({
             success: false,
-            message: "Fund PIN must contain exactly 6 digits.",
+            message: "Firestore service is unavailable.",
           });
         }
 
-        const userRef = getUserRef(userId);
-        const userDoc = await userRef.get();
+        const uid =
+          req.uid ||
+          req.user?.uid ||
+          req.user?.userId ||
+          req.user?.id;
 
-        if (!userDoc.exists) {
-          return res.status(404).json({
+        if (!uid) {
+          return res.status(401).json({
             success: false,
-            message: "Your account record could not be found.",
+            message: "Authenticated user is required.",
           });
         }
 
-        const user = userDoc.data() || {};
-
-        if (user.fundPasswordHash) {
-          return res.status(400).json({
-            success: false,
-            message:
-              "A Fund PIN already exists. Please use Change Fund PIN.",
-          });
-        }
-
-        const fundPasswordHash = await bcrypt.hash(
-          String(newPassword),
-          12
+        await kendrick.saveFundPassword(
+          firestore.collection("users").doc(uid),
+          req.body?.newPassword
         );
 
-        await userRef.update({
-          fundPasswordHash,
-          hasFundPassword: true,
-          fundPasswordUpdatedAt:
-            FieldValue.serverTimestamp(),
-        });
-
-        return res.status(200).json({
+        return res.json({
           success: true,
-          message: "Fund PIN created successfully.",
+          message: "Fund password set successfully.",
         });
       } catch (error) {
-        console.error(
-          "❌ Set Fund PIN error:",
-          error
-        );
-
-        return res.status(500).json({
+        return res.status(400).json({
           success: false,
-          message:
-            "Unable to create Fund PIN. Please try again.",
+          message: error.message,
         });
       }
     }
   );
 
-  // ==========================================================
-  // CHANGE FUND PIN
-  // ==========================================================
-
-  router.post(
-    "/api/user/update-fund-password",
-    strictLimiter,
-    verifyAuth,
-    async (req, res) => {
-      try {
-        const {
-          oldPassword,
-          newPassword,
-        } = req.body || {};
-
-        const userId = req.uid;
-
-        if (!validatePin(oldPassword)) {
-          return res.status(400).json({
-            success: false,
-            message:
-              "Current Fund PIN must contain exactly 6 digits.",
-          });
-        }
-
-        if (!validatePin(newPassword)) {
-          return res.status(400).json({
-            success: false,
-            message:
-              "New Fund PIN must contain exactly 6 digits.",
-          });
-        }
-
-        const userRef = getUserRef(userId);
-        const userDoc = await userRef.get();
-
-        if (!userDoc.exists) {
-          return res.status(404).json({
-            success: false,
-            message:
-              "Your account record could not be found.",
-          });
-        }
-
-        const user = userDoc.data() || {};
-
-        if (!user.fundPasswordHash) {
-          return res.status(400).json({
-            success: false,
-            message:
-              "You have not created a Fund PIN yet. Please create one first.",
-          });
-        }
-
-        const valid = await bcrypt.compare(
-          String(oldPassword),
-          user.fundPasswordHash
-        );
-
-        if (!valid) {
-          return res.status(400).json({
-            success: false,
-            message:
-              "Incorrect current Fund PIN.",
-          });
-        }
-
-        const fundPasswordHash = await bcrypt.hash(
-          String(newPassword),
-          12
-        );
-
-        await userRef.update({
-          fundPasswordHash,
-          hasFundPassword: true,
-          fundPasswordUpdatedAt:
-            FieldValue.serverTimestamp(),
-        });
-
-        return res.status(200).json({
-          success: true,
-          message: "Fund PIN changed successfully.",
-        });
-      } catch (error) {
-        console.error(
-          "❌ Change Fund PIN error:",
-          error
-        );
-
-        return res.status(500).json({
-          success: false,
-          message:
-            "Unable to change Fund PIN. Please try again.",
-        });
-      }
-    }
-  );
-
-  // ==========================================================
-  // RESET / RECOVER FUND PIN
-  //
-  // Flutter re-authenticates the user's LOGIN password
-  // before calling this endpoint.
-  // ==========================================================
-
-  router.post(
-    "/api/user/reset-fund-password",
-    strictLimiter,
-    verifyAuth,
-    async (req, res) => {
-      try {
-        const { newPassword } = req.body || {};
-        const userId = req.uid;
-
-        if (!validatePin(newPassword)) {
-          return res.status(400).json({
-            success: false,
-            message:
-              "Fund PIN must contain exactly 6 digits.",
-          });
-        }
-
-        const userRef = getUserRef(userId);
-        const userDoc = await userRef.get();
-
-        if (!userDoc.exists) {
-          return res.status(404).json({
-            success: false,
-            message:
-              "Your account record could not be found.",
-          });
-        }
-
-        const fundPasswordHash = await bcrypt.hash(
-          String(newPassword),
-          12
-        );
-
-        await userRef.update({
-          fundPasswordHash,
-          hasFundPassword: true,
-          fundPasswordUpdatedAt:
-            FieldValue.serverTimestamp(),
-        });
-
-        return res.status(200).json({
-          success: true,
-          message:
-            "Fund PIN reset successfully.",
-        });
-      } catch (error) {
-        console.error(
-          "❌ Reset Fund PIN error:",
-          error
-        );
-
-        return res.status(500).json({
-          success: false,
-          message:
-            "Unable to reset Fund PIN. Please try again.",
-        });
-      }
-    }
-  );
-
-  // ==========================================================
-  // LEGACY FUND PIN UPDATE
-  //
-  // Kept for compatibility with older Flutter builds.
-  // ==========================================================
-
+  // ------------------------------------------------------------
+  // UPDATE FUND PASSWORD
+  // ------------------------------------------------------------
   router.post(
     "/api/users/fund-password",
-    strictLimiter,
     verifyAuth,
+    limiter,
+    verifyFirestore,
     async (req, res) => {
       try {
-        const {
-          oldPassword,
-          newPassword,
-        } = req.body || {};
+        const firestore =
+          typeof kendrick.getFirestore === "function"
+            ? kendrick.getFirestore()
+            : null;
 
-        const userId = req.uid;
-
-        if (!validatePin(oldPassword)) {
-          return res.status(400).json({
+        if (!firestore) {
+          return res.status(500).json({
             success: false,
-            message:
-              "Current Fund PIN must contain exactly 6 digits.",
+            message: "Firestore service is unavailable.",
           });
         }
 
-        if (!validatePin(newPassword)) {
-          return res.status(400).json({
+        const uid =
+          req.uid ||
+          req.user?.uid ||
+          req.user?.userId ||
+          req.user?.id;
+
+        if (!uid) {
+          return res.status(401).json({
             success: false,
-            message:
-              "New Fund PIN must contain exactly 6 digits.",
+            message: "Authenticated user is required.",
           });
         }
 
-        const userRef = getUserRef(userId);
-        const userDoc = await userRef.get();
+        const ref =
+          firestore.collection("users").doc(uid);
 
-        if (!userDoc.exists) {
-          return res.status(404).json({
+        const doc = await ref.get();
+
+        if (!doc.exists) {
+          return res.json({
             success: false,
-            message:
-              "Your account record could not be found.",
+            message: "User account not found.",
           });
         }
 
-        const user = userDoc.data() || {};
+        const user = doc.data() || {};
 
-        if (!user.fundPasswordHash) {
-          return res.status(400).json({
+        if (
+          user.fundPasswordHash ||
+          user.fundPassword
+        ) {
+          if (
+            typeof kendrick.verifyFundPassword !== "function" ||
+            !(await kendrick.verifyFundPassword(
+              user,
+              req.body?.oldPassword
+            ))
+          ) {
+            return res.json({
+              success: false,
+              message: "Incorrect old fund password.",
+            });
+          }
+        }
+
+        const newPassword = String(
+          req.body?.newPassword || ""
+        ).trim();
+
+        if (!/^(?:\d{6}|[a-f0-9]{64})$/i.test(newPassword)) {
+          return res.json({
             success: false,
-            message:
-              "You have not created a Fund PIN yet.",
+            message: "Fund password must be 6 digits.",
           });
         }
 
-        const valid = await bcrypt.compare(
-          String(oldPassword),
-          user.fundPasswordHash
+        if (
+          typeof kendrick.setFundPasswordFromLegacyHash !==
+          "function"
+        ) {
+          return res.status(500).json({
+            success: false,
+            message: "Fund password service is unavailable.",
+          });
+        }
+
+        await kendrick.setFundPasswordFromLegacyHash(
+          ref,
+          newPassword
         );
 
-        if (!valid) {
-          return res.status(400).json({
-            success: false,
-            message:
-              "Incorrect current Fund PIN.",
-          });
-        }
-
-        const fundPasswordHash = await bcrypt.hash(
-          String(newPassword),
-          12
-        );
-
-        await userRef.update({
-          fundPasswordHash,
-          hasFundPassword: true,
-          fundPasswordUpdatedAt:
-            FieldValue.serverTimestamp(),
-        });
-
-        return res.status(200).json({
+        return res.json({
           success: true,
-          message:
-            "Fund PIN changed successfully.",
+          message: "Fund password updated successfully.",
         });
       } catch (error) {
-        console.error(
-          "❌ Legacy Fund PIN update error:",
-          error
-        );
-
-        return res.status(500).json({
+        return res.status(400).json({
           success: false,
-          message:
-            "Unable to update Fund PIN.",
+          message: error.message,
         });
       }
     }

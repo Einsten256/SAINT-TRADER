@@ -1,27 +1,26 @@
-"use strict";
-
 // ============================================================
-// SAINT CRYPTO — WITHDRAWAL WALLET SERVICE
+// SAINT CRYPTO — MOBILE MONEY WITHDRAWAL PROFILE SERVICE
 // services/withdrawal_wallet.js
-//
+// ============================================================
 // Purpose:
-// - Save the user's first USDT TRC20 withdrawal wallet.
-// - Lock the active wallet so normal withdrawal requests cannot
-//   silently redirect funds.
-// - Allow the user to request a NEW wallet separately.
-// - Keep the current wallet untouched while a change is pending.
-// - Promote the new wallet only through an explicit approval call.
+// - Save the user's withdrawal identity for Mobile Money.
+// - Support MTN or Airtel.
+// - Save recipient name + mobile number.
+// - Keep the profile reusable for future withdrawals.
+// - Allow the user to request a new withdrawal identity.
+// - Keep the current identity active while a change is pending.
+// - Promote/reject changes only through an admin/security path.
 // - No withdrawal request is created here.
 // - No ledger/funds are touched here.
-// - No Fund PIN is required here.
+// - No crypto wallet / TRON / USDT logic.
 // ============================================================
 
-const {
-  getFirestore,
-  FieldValue,
-} = require("firebase-admin/firestore");
+"use strict";
 
-let firestore;
+const { getFirestore, FieldValue } =
+  require("firebase-admin/firestore");
+
+let firestore = null;
 
 try {
   firestore = getFirestore();
@@ -33,18 +32,69 @@ try {
 }
 
 // ============================================================
-// TRON VALIDATION
+// HELPERS
 // ============================================================
 
-function validTron(address) {
-  return (
-    typeof address === "string" &&
-    /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address.trim())
-  );
+function normalizeName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
 }
 
-function normalizeAddress(address) {
-  return String(address || "").trim();
+function normalizeNetwork(value) {
+  const network = String(value || "")
+    .trim()
+    .toUpperCase();
+
+  if (network === "MTN") return "MTN";
+  if (network === "AIRTEL") return "AIRTEL";
+
+  return "";
+}
+
+function normalizePhone(value) {
+  let phone = String(value || "")
+    .trim()
+    .replace(/[\s()-]/g, "");
+
+  if (phone.startsWith("+256")) {
+    phone = "0" + phone.slice(4);
+  } else if (phone.startsWith("256")) {
+    phone = "0" + phone.slice(3);
+  }
+
+  return phone;
+}
+
+function validUgandaPhone(phone) {
+  return /^07[0-9]{8}$/.test(phone);
+}
+
+function validNetworkPhone(network, phone) {
+  if (!validUgandaPhone(phone)) {
+    return false;
+  }
+
+  const prefix = phone.slice(0, 3);
+
+  const mtnPrefixes = [
+    "077", "078", "076"
+  ];
+
+  const airtelPrefixes = [
+    "070", "075", "074"
+  ];
+
+  if (network === "MTN") {
+    return mtnPrefixes.includes(prefix);
+  }
+
+  if (network === "AIRTEL") {
+    return airtelPrefixes.includes(prefix);
+  }
+
+  return false;
 }
 
 function serializeTimestamp(value) {
@@ -62,49 +112,210 @@ function serializeTimestamp(value) {
 }
 
 function safeStatus(value, fallback = "PENDING") {
-  const status = String(value || "").trim().toUpperCase();
+  const status = String(value || "")
+    .trim()
+    .toUpperCase();
+
   return status || fallback;
 }
 
-// ============================================================
-// SAVE FIRST WITHDRAWAL WALLET
-// ============================================================
+function authRequired() {
+  return {
+    success: false,
+    code: "AUTH_REQUIRED",
+    message: "Your account could not be verified.",
+    httpStatus: 401,
+  };
+}
 
-async function saveWithdrawalWallet(userId, address) {
-  if (!firestore) {
+function databaseUnavailable() {
+  return {
+    success: false,
+    code: "DATABASE_UNAVAILABLE",
+    message:
+      "Our account database is temporarily unavailable.",
+    httpStatus: 503,
+  };
+}
+
+function accountFrozen() {
+  const error = new Error(
+    "Your account is currently restricted."
+  );
+  error.code = "ACCOUNT_FROZEN";
+  error.httpStatus = 403;
+  return error;
+}
+
+function validateIdentity(name, network, mobile) {
+  if (!name) {
     return {
-      success: false,
-      code: "DATABASE_UNAVAILABLE",
-      message: "Our account database is temporarily unavailable.",
-      httpStatus: 503,
+      ok: false,
+      code: "RECIPIENT_NAME_REQUIRED",
+      message: "Please enter the recipient name.",
     };
   }
+
+  if (name.length < 2) {
+    return {
+      ok: false,
+      code: "INVALID_RECIPIENT_NAME",
+      message: "Please enter a valid recipient name.",
+    };
+  }
+
+  if (!network) {
+    return {
+      ok: false,
+      code: "NETWORK_REQUIRED",
+      message: "Please select MTN or Airtel.",
+    };
+  }
+
+  if (!mobile) {
+    return {
+      ok: false,
+      code: "MOBILE_NUMBER_REQUIRED",
+      message: "Please enter the Mobile Money number.",
+    };
+  }
+
+  if (!validUgandaPhone(mobile)) {
+    return {
+      ok: false,
+      code: "INVALID_MOBILE_NUMBER",
+      message:
+        "Please enter a valid Ugandan Mobile Money number.",
+    };
+  }
+
+  if (!validNetworkPhone(network, mobile)) {
+    return {
+      ok: false,
+      code: "NETWORK_NUMBER_MISMATCH",
+      message:
+        `The number does not match the selected ${network} network.`,
+    };
+  }
+
+  return { ok: true };
+}
+
+function serializeProfile(user) {
+  const profile = user.withdrawalProfile || {};
+
+  const name = normalizeName(
+    profile.name || user.withdrawal_name
+  );
+
+  const network = normalizeNetwork(
+    profile.network || user.withdrawal_network
+  );
+
+  const mobile = normalizePhone(
+    profile.mobile || user.withdrawal_mobile
+  );
+
+  if (!name && !network && !mobile) {
+    return null;
+  }
+
+  return {
+    name,
+    network,
+    mobile,
+    locked:
+      profile.locked === true ||
+      user.withdrawal_profile_locked === true,
+    status: safeStatus(
+      profile.status || user.withdrawal_profile_status,
+      "PENDING"
+    ),
+    savedAt: serializeTimestamp(
+      profile.savedAt || user.withdrawal_profile_saved_at
+    ),
+    approvedAt: serializeTimestamp(
+      profile.approvedAt ||
+      user.withdrawal_profile_approved_at
+    ),
+  };
+}
+
+function serializePending(user) {
+  const pendingName = normalizeName(
+    user.pending_withdrawal_name
+  );
+
+  const pendingNetwork = normalizeNetwork(
+    user.pending_withdrawal_network
+  );
+
+  const pendingMobile = normalizePhone(
+    user.pending_withdrawal_mobile
+  );
+
+  if (!pendingName && !pendingNetwork && !pendingMobile) {
+    return null;
+  }
+
+  return {
+    name: pendingName,
+    network: pendingNetwork,
+    mobile: pendingMobile,
+    status: safeStatus(
+      user.withdrawal_profile_change_status,
+      "PENDING"
+    ),
+    requestedAt: serializeTimestamp(
+      user.withdrawal_profile_change_requested_at
+    ),
+    approvedAt: serializeTimestamp(
+      user.withdrawal_profile_change_approved_at
+    ),
+    approvedBy:
+      user.withdrawal_profile_change_approved_by || null,
+    rejectedAt: serializeTimestamp(
+      user.withdrawal_profile_change_rejected_at
+    ),
+    rejectedBy:
+      user.withdrawal_profile_change_rejected_by || null,
+    rejectionReason:
+      user.withdrawal_profile_change_rejection_reason ||
+      null,
+  };
+}
+
+// ============================================================
+// SAVE FIRST WITHDRAWAL PROFILE
+// ============================================================
+
+async function saveWithdrawalWallet(
+  userId,
+  name,
+  network,
+  mobile
+) {
+  if (!firestore) return databaseUnavailable();
 
   if (!userId || typeof userId !== "string") {
-    return {
-      success: false,
-      code: "AUTH_REQUIRED",
-      message: "Your account could not be verified.",
-      httpStatus: 401,
-    };
+    return authRequired();
   }
 
-  const normalizedAddress = normalizeAddress(address);
+  const cleanName = normalizeName(name);
+  const cleanNetwork = normalizeNetwork(network);
+  const cleanMobile = normalizePhone(mobile);
 
-  if (!normalizedAddress) {
+  const validation = validateIdentity(
+    cleanName,
+    cleanNetwork,
+    cleanMobile
+  );
+
+  if (!validation.ok) {
     return {
       success: false,
-      code: "ADDRESS_REQUIRED",
-      message: "Please enter your USDT TRC20 wallet address.",
-      httpStatus: 400,
-    };
-  }
-
-  if (!validTron(normalizedAddress)) {
-    return {
-      success: false,
-      code: "INVALID_TRC20_ADDRESS",
-      message: "Please enter a valid USDT TRC20 wallet address.",
+      code: validation.code,
+      message: validation.message,
       httpStatus: 400,
     };
   }
@@ -118,7 +329,9 @@ async function saveWithdrawalWallet(userId, address) {
       const userDoc = await transaction.get(userRef);
 
       if (!userDoc.exists) {
-        const error = new Error("Your account record could not be found.");
+        const error = new Error(
+          "Your account record could not be found."
+        );
         error.code = "USER_NOT_FOUND";
         error.httpStatus = 404;
         throw error;
@@ -128,131 +341,103 @@ async function saveWithdrawalWallet(userId, address) {
 
       if (
         user.is_frozen === true ||
-        user.status === "FROZEN"
+        String(user.status || "").toUpperCase() === "FROZEN"
       ) {
-        const error = new Error("Your account is currently restricted.");
-        error.code = "ACCOUNT_FROZEN";
-        error.httpStatus = 403;
-        throw error;
+        throw accountFrozen();
       }
 
-      const existingAddress = normalizeAddress(
-        user.withdrawal_wallet_address
-      );
+      const existing = serializeProfile(user);
+      const locked =
+        user.withdrawal_profile_locked === true ||
+        existing?.locked === true;
 
-      const locked = user.withdrawal_wallet_locked === true;
+      if (existing && locked) {
+        const same =
+          existing.name.toLowerCase() ===
+            cleanName.toLowerCase() &&
+          existing.network === cleanNetwork &&
+          existing.mobile === cleanMobile;
 
-      // ----------------------------------------------------------
-      // Existing active wallet:
-      // - Same address = harmless/idempotent.
-      // - Different address = MUST use the change endpoint.
-      // ----------------------------------------------------------
-
-      if (existingAddress && locked) {
-        if (existingAddress !== normalizedAddress) {
+        if (!same) {
           const error = new Error(
-            "Your withdrawal wallet is already locked. Use the wallet-change request instead."
+            "Your withdrawal details are already locked. Use the withdrawal-details change request instead."
           );
-          error.code = "WITHDRAWAL_WALLET_LOCKED";
+          error.code = "WITHDRAWAL_PROFILE_LOCKED";
           error.httpStatus = 409;
           throw error;
         }
 
         result = {
           success: true,
-          code: "WITHDRAWAL_WALLET_ALREADY_SAVED",
-          message: "Your withdrawal wallet is already saved and locked.",
-          wallet: {
-            address: existingAddress,
-            network: user.withdrawal_wallet_network || "TRC20",
-            coin: user.withdrawal_wallet_coin || "USDT",
-            locked: true,
-            status: safeStatus(
-              user.withdrawal_wallet_status,
-              "PENDING"
-            ),
-            savedAt: serializeTimestamp(
-              user.withdrawal_wallet_saved_at
-            ),
-            approvedAt: serializeTimestamp(
-              user.withdrawal_wallet_approved_at
-            ),
-          },
-          pendingChange: user.pending_withdrawal_wallet_address
-            ? {
-                address:
-                  user.pending_withdrawal_wallet_address,
-                network:
-                  user.pending_withdrawal_wallet_network ||
-                  "TRC20",
-                coin:
-                  user.pending_withdrawal_wallet_coin ||
-                  "USDT",
-                status: safeStatus(
-                  user.wallet_change_status,
-                  "PENDING"
-                ),
-                requestedAt: serializeTimestamp(
-                  user.wallet_change_requested_at
-                ),
-              }
-            : null,
+          code: "WITHDRAWAL_PROFILE_ALREADY_SAVED",
+          message:
+            "Your Mobile Money withdrawal details are already saved and locked.",
+          profile: existing,
+          pendingChange: serializePending(user),
           httpStatus: 200,
         };
 
         return;
       }
 
-      // ----------------------------------------------------------
-      // First wallet only.
-      // ----------------------------------------------------------
-
       transaction.set(
         userRef,
         {
-          withdrawal_wallet_address: normalizedAddress,
-          withdrawal_wallet_network: "TRC20",
-          withdrawal_wallet_coin: "USDT",
-          withdrawal_wallet_locked: true,
-          withdrawal_wallet_status: "PENDING",
-          withdrawal_wallet_saved_at:
+          withdrawalProfile: {
+            name: cleanName,
+            network: cleanNetwork,
+            mobile: cleanMobile,
+            locked: true,
+            status: "ACTIVE",
+            savedAt:
+              FieldValue.serverTimestamp(),
+            approvedAt:
+              FieldValue.serverTimestamp(),
+          },
+
+          // Flat fields retained for compatibility.
+          withdrawal_name: cleanName,
+          withdrawal_network: cleanNetwork,
+          withdrawal_mobile: cleanMobile,
+          withdrawal_profile_locked: true,
+          withdrawal_profile_status: "ACTIVE",
+          withdrawal_profile_saved_at:
             FieldValue.serverTimestamp(),
-          withdrawal_wallet_approved_at: null,
-          withdrawal_wallet_updated_at:
+          withdrawal_profile_approved_at:
+            FieldValue.serverTimestamp(),
+          withdrawal_profile_updated_at:
             FieldValue.serverTimestamp(),
 
-          // Clear any stale pending-change fields if present.
-          pending_withdrawal_wallet_address:
+          // Clear stale pending request.
+          pending_withdrawal_name:
             FieldValue.delete(),
-          pending_withdrawal_wallet_network:
+          pending_withdrawal_network:
             FieldValue.delete(),
-          pending_withdrawal_wallet_coin:
+          pending_withdrawal_mobile:
             FieldValue.delete(),
-          wallet_change_status:
+          withdrawal_profile_change_status:
             FieldValue.delete(),
-          wallet_change_requested_at:
+          withdrawal_profile_change_requested_at:
             FieldValue.delete(),
-          wallet_change_approved_at:
+          withdrawal_profile_change_approved_at:
             FieldValue.delete(),
-          wallet_change_approved_by:
+          withdrawal_profile_change_approved_by:
             FieldValue.delete(),
         },
-        {
-          merge: true,
-        }
+        { merge: true }
       );
 
       result = {
         success: true,
-        code: "WITHDRAWAL_WALLET_SAVED",
+        code: "WITHDRAWAL_PROFILE_SAVED",
         message:
-          "Your withdrawal wallet has been saved and locked. It can now be prepared in the withdrawal system.",
-        wallet: {
-          address: normalizedAddress,
-          network: "TRC20",
-          coin: "USDT",
+          "Your Mobile Money withdrawal details have been saved.",
+        profile: {
+          name: cleanName,
+          network: cleanNetwork,
+          mobile: cleanMobile,
           locked: true,
-          status: "PENDING",
+          status: "ACTIVE",
           savedAt: null,
           approvedAt: null,
         },
@@ -264,16 +449,18 @@ async function saveWithdrawalWallet(userId, address) {
     return result;
   } catch (error) {
     console.error(
-      "❌ Save withdrawal wallet:",
+      "❌ Save withdrawal profile:",
       error.message
     );
 
     return {
       success: false,
-      code: error.code || "WITHDRAWAL_WALLET_SAVE_FAILED",
+      code:
+        error.code ||
+        "WITHDRAWAL_PROFILE_SAVE_FAILED",
       message:
         error.message ||
-        "Unable to save your withdrawal wallet.",
+        "Unable to save your withdrawal details.",
       httpStatus:
         Number(error.httpStatus) >= 400 &&
         Number(error.httpStatus) <= 599
@@ -284,53 +471,36 @@ async function saveWithdrawalWallet(userId, address) {
 }
 
 // ============================================================
-// REQUEST NEW WITHDRAWAL WALLET
-//
-// IMPORTANT:
-// - This does NOT replace the active wallet.
-// - The active wallet remains locked and unchanged.
-// - The new address is stored separately.
-// - Approval is required before promotion.
+// REQUEST NEW WITHDRAWAL PROFILE
 // ============================================================
 
 async function requestWithdrawalWalletChange(
   userId,
-  newAddress
+  name,
+  network,
+  mobile
 ) {
-  if (!firestore) {
-    return {
-      success: false,
-      code: "DATABASE_UNAVAILABLE",
-      message: "Our account database is temporarily unavailable.",
-      httpStatus: 503,
-    };
-  }
+  if (!firestore) return databaseUnavailable();
 
   if (!userId || typeof userId !== "string") {
-    return {
-      success: false,
-      code: "AUTH_REQUIRED",
-      message: "Your account could not be verified.",
-      httpStatus: 401,
-    };
+    return authRequired();
   }
 
-  const normalizedAddress = normalizeAddress(newAddress);
+  const cleanName = normalizeName(name);
+  const cleanNetwork = normalizeNetwork(network);
+  const cleanMobile = normalizePhone(mobile);
 
-  if (!normalizedAddress) {
+  const validation = validateIdentity(
+    cleanName,
+    cleanNetwork,
+    cleanMobile
+  );
+
+  if (!validation.ok) {
     return {
       success: false,
-      code: "ADDRESS_REQUIRED",
-      message: "Please enter the new USDT TRC20 wallet address.",
-      httpStatus: 400,
-    };
-  }
-
-  if (!validTron(normalizedAddress)) {
-    return {
-      success: false,
-      code: "INVALID_TRC20_ADDRESS",
-      message: "Please enter a valid USDT TRC20 wallet address.",
+      code: validation.code,
+      message: validation.message,
       httpStatus: 400,
     };
   }
@@ -344,7 +514,9 @@ async function requestWithdrawalWalletChange(
       const userDoc = await transaction.get(userRef);
 
       if (!userDoc.exists) {
-        const error = new Error("Your account record could not be found.");
+        const error = new Error(
+          "Your account record could not be found."
+        );
         error.code = "USER_NOT_FOUND";
         error.httpStatus = 404;
         throw error;
@@ -354,111 +526,71 @@ async function requestWithdrawalWalletChange(
 
       if (
         user.is_frozen === true ||
-        user.status === "FROZEN"
+        String(user.status || "").toUpperCase() === "FROZEN"
       ) {
-        const error = new Error("Your account is currently restricted.");
-        error.code = "ACCOUNT_FROZEN";
-        error.httpStatus = 403;
-        throw error;
+        throw accountFrozen();
       }
 
-      const currentAddress = normalizeAddress(
-        user.withdrawal_wallet_address
-      );
+      const current = serializeProfile(user);
 
-      if (
-        !currentAddress ||
-        user.withdrawal_wallet_locked !== true
-      ) {
+      if (!current || current.locked !== true) {
         const error = new Error(
-          "Your current withdrawal wallet has not been set up yet. Save your first wallet before requesting a change."
+          "Your current withdrawal details have not been set up yet."
         );
-        error.code = "CURRENT_WALLET_NOT_SET";
+        error.code = "CURRENT_PROFILE_NOT_SET";
         error.httpStatus = 409;
         throw error;
       }
 
-      if (currentAddress === normalizedAddress) {
+      const same =
+        current.name.toLowerCase() ===
+          cleanName.toLowerCase() &&
+        current.network === cleanNetwork &&
+        current.mobile === cleanMobile;
+
+      if (same) {
         result = {
           success: true,
-          code: "CURRENT_WALLET_REUSED",
+          code: "CURRENT_PROFILE_REUSED",
           message:
-            "That address is already your active withdrawal wallet.",
-          wallet: {
-            address: currentAddress,
-            network:
-              user.withdrawal_wallet_network || "TRC20",
-            coin:
-              user.withdrawal_wallet_coin || "USDT",
-            locked: true,
-            status: safeStatus(
-              user.withdrawal_wallet_status,
-              "PENDING"
-            ),
-          },
+            "Those are already your active withdrawal details.",
+          profile: current,
           pendingChange: null,
           httpStatus: 200,
         };
         return;
       }
 
-      const pendingAddress = normalizeAddress(
-        user.pending_withdrawal_wallet_address
-      );
-
-      const pendingStatus = safeStatus(
-        user.wallet_change_status,
-        ""
-      );
-
-      // ----------------------------------------------------------
-      // Do not silently replace an existing pending request.
-      // ----------------------------------------------------------
+      const pending = serializePending(user);
 
       if (
-        pendingAddress &&
-        pendingStatus === "PENDING"
+        pending &&
+        pending.status === "PENDING"
       ) {
-        if (pendingAddress === normalizedAddress) {
+        const samePending =
+          pending.name.toLowerCase() ===
+            cleanName.toLowerCase() &&
+          pending.network === cleanNetwork &&
+          pending.mobile === cleanMobile;
+
+        if (samePending) {
           result = {
             success: true,
-            code: "WALLET_CHANGE_ALREADY_PENDING",
+            code: "WITHDRAWAL_PROFILE_CHANGE_ALREADY_PENDING",
             message:
-              "This wallet change request is already pending approval.",
-            wallet: {
-              address: currentAddress,
-              network:
-                user.withdrawal_wallet_network || "TRC20",
-              coin:
-                user.withdrawal_wallet_coin || "USDT",
-              locked: true,
-              status: safeStatus(
-                user.withdrawal_wallet_status,
-                "PENDING"
-              ),
-            },
-            pendingChange: {
-              address: pendingAddress,
-              network:
-                user.pending_withdrawal_wallet_network ||
-                "TRC20",
-              coin:
-                user.pending_withdrawal_wallet_coin ||
-                "USDT",
-              status: "PENDING",
-              requestedAt: serializeTimestamp(
-                user.wallet_change_requested_at
-              ),
-            },
+              "These withdrawal details are already pending approval.",
+            profile: current,
+            pendingChange: pending,
             httpStatus: 200,
           };
           return;
         }
 
         const error = new Error(
-          "A wallet change request is already pending. Please wait for it to be reviewed."
+          "A withdrawal-details change request is already pending."
         );
-        error.code = "WALLET_CHANGE_ALREADY_PENDING";
+        error.code =
+          "WITHDRAWAL_PROFILE_CHANGE_ALREADY_PENDING";
         error.httpStatus = 409;
         throw error;
       }
@@ -466,53 +598,35 @@ async function requestWithdrawalWalletChange(
       transaction.set(
         userRef,
         {
-          // Active wallet remains untouched.
-          withdrawal_wallet_address: currentAddress,
-          withdrawal_wallet_network:
-            user.withdrawal_wallet_network || "TRC20",
-          withdrawal_wallet_coin:
-            user.withdrawal_wallet_coin || "USDT",
-          withdrawal_wallet_locked: true,
+          pending_withdrawal_name: cleanName,
+          pending_withdrawal_network: cleanNetwork,
+          pending_withdrawal_mobile: cleanMobile,
 
-          // New wallet lives separately until approval.
-          pending_withdrawal_wallet_address:
-            normalizedAddress,
-          pending_withdrawal_wallet_network: "TRC20",
-          pending_withdrawal_wallet_coin: "USDT",
-          wallet_change_status: "PENDING",
-          wallet_change_requested_at:
+          withdrawal_profile_change_status: "PENDING",
+          withdrawal_profile_change_requested_at:
             FieldValue.serverTimestamp(),
-          wallet_change_approved_at: null,
-          wallet_change_approved_by: null,
-          withdrawal_wallet_updated_at:
+          withdrawal_profile_change_approved_at: null,
+          withdrawal_profile_change_approved_by: null,
+          withdrawal_profile_change_rejected_at: null,
+          withdrawal_profile_change_rejected_by: null,
+          withdrawal_profile_change_rejection_reason: null,
+
+          withdrawal_profile_updated_at:
             FieldValue.serverTimestamp(),
         },
-        {
-          merge: true,
-        }
+        { merge: true }
       );
 
       result = {
         success: true,
-        code: "WALLET_CHANGE_REQUESTED",
+        code: "WITHDRAWAL_PROFILE_CHANGE_REQUESTED",
         message:
-          "Your new withdrawal wallet has been submitted for review. Your current wallet remains active until the change is approved.",
-        wallet: {
-          address: currentAddress,
-          network:
-            user.withdrawal_wallet_network || "TRC20",
-          coin:
-            user.withdrawal_wallet_coin || "USDT",
-          locked: true,
-          status: safeStatus(
-            user.withdrawal_wallet_status,
-            "PENDING"
-          ),
-        },
+          "Your new Mobile Money withdrawal details have been submitted for review. Your current details remain active until approval.",
+        profile: current,
         pendingChange: {
-          address: normalizedAddress,
-          network: "TRC20",
-          coin: "USDT",
+          name: cleanName,
+          network: cleanNetwork,
+          mobile: cleanMobile,
           status: "PENDING",
           requestedAt: null,
         },
@@ -523,7 +637,7 @@ async function requestWithdrawalWalletChange(
     return result;
   } catch (error) {
     console.error(
-      "❌ Request withdrawal wallet change:",
+      "❌ Request withdrawal profile change:",
       error.message
     );
 
@@ -531,10 +645,10 @@ async function requestWithdrawalWalletChange(
       success: false,
       code:
         error.code ||
-        "WITHDRAWAL_WALLET_CHANGE_FAILED",
+        "WITHDRAWAL_PROFILE_CHANGE_FAILED",
       message:
         error.message ||
-        "Unable to request a withdrawal wallet change.",
+        "Unable to request a withdrawal-details change.",
       httpStatus:
         Number(error.httpStatus) >= 400 &&
         Number(error.httpStatus) <= 599
@@ -545,27 +659,15 @@ async function requestWithdrawalWalletChange(
 }
 
 // ============================================================
-// APPROVE PENDING WALLET CHANGE
-//
-// SECURITY-SENSITIVE:
-// - This function must be called only by a trusted admin/security
-//   path, never directly from Flutter.
-// - Existing withdrawal records are NOT modified.
-// - The new wallet becomes the future active wallet.
+// APPROVE PENDING WITHDRAWAL PROFILE CHANGE
 // ============================================================
+// SECURITY-SENSITIVE: admin/security path only.
 
 async function approveWithdrawalWalletChange(
   userId,
   approvedBy = ""
 ) {
-  if (!firestore) {
-    return {
-      success: false,
-      code: "DATABASE_UNAVAILABLE",
-      message: "Our account database is temporarily unavailable.",
-      httpStatus: 503,
-    };
-  }
+  if (!firestore) return databaseUnavailable();
 
   if (!userId || typeof userId !== "string") {
     return {
@@ -582,7 +684,8 @@ async function approveWithdrawalWalletChange(
     return {
       success: false,
       code: "APPROVER_REQUIRED",
-      message: "An approving administrator is required.",
+      message:
+        "An approving administrator is required.",
       httpStatus: 400,
     };
   }
@@ -596,7 +699,9 @@ async function approveWithdrawalWalletChange(
       const userDoc = await transaction.get(userRef);
 
       if (!userDoc.exists) {
-        const error = new Error("User account could not be found.");
+        const error = new Error(
+          "User account could not be found."
+        );
         error.code = "USER_NOT_FOUND";
         error.httpStatus = 404;
         throw error;
@@ -606,122 +711,116 @@ async function approveWithdrawalWalletChange(
 
       if (
         user.is_frozen === true ||
-        user.status === "FROZEN"
+        String(user.status || "").toUpperCase() === "FROZEN"
       ) {
-        const error = new Error(
-          "The user's account is currently restricted."
-        );
-        error.code = "ACCOUNT_FROZEN";
-        error.httpStatus = 403;
-        throw error;
+        throw accountFrozen();
       }
 
-      const currentAddress = normalizeAddress(
-        user.withdrawal_wallet_address
-      );
+      const current = serializeProfile(user);
+      const pending = serializePending(user);
 
-      const pendingAddress = normalizeAddress(
-        user.pending_withdrawal_wallet_address
-      );
-
-      const pendingStatus = safeStatus(
-        user.wallet_change_status,
-        ""
-      );
+      if (!current || current.locked !== true) {
+        const error = new Error(
+          "The user's current withdrawal details are not properly configured."
+        );
+        error.code = "CURRENT_PROFILE_NOT_SET";
+        error.httpStatus = 409;
+        throw error;
+      }
 
       if (
-        !currentAddress ||
-        user.withdrawal_wallet_locked !== true
+        !pending ||
+        pending.status !== "PENDING"
       ) {
         const error = new Error(
-          "The user's current withdrawal wallet is not properly configured."
+          "There is no pending withdrawal-details change request for this user."
         );
-        error.code = "CURRENT_WALLET_NOT_SET";
+        error.code =
+          "NO_PENDING_WITHDRAWAL_PROFILE_CHANGE";
         error.httpStatus = 409;
         throw error;
       }
 
-      if (!pendingAddress || pendingStatus !== "PENDING") {
+      const validation = validateIdentity(
+        pending.name,
+        pending.network,
+        pending.mobile
+      );
+
+      if (!validation.ok) {
         const error = new Error(
-          "There is no pending wallet change request for this user."
+          validation.message
         );
-        error.code = "NO_PENDING_WALLET_CHANGE";
+        error.code =
+          "INVALID_PENDING_WITHDRAWAL_PROFILE";
         error.httpStatus = 409;
         throw error;
       }
-
-      if (!validTron(pendingAddress)) {
-        const error = new Error(
-          "The pending withdrawal wallet is invalid."
-        );
-        error.code = "INVALID_PENDING_WALLET";
-        error.httpStatus = 409;
-        throw error;
-      }
-
-      const oldAddress = currentAddress;
 
       transaction.set(
         userRef,
         {
-          withdrawal_wallet_address: pendingAddress,
-          withdrawal_wallet_network:
-            user.pending_withdrawal_wallet_network ||
-            "TRC20",
-          withdrawal_wallet_coin:
-            user.pending_withdrawal_wallet_coin ||
-            "USDT",
-          withdrawal_wallet_locked: true,
-          withdrawal_wallet_status: "PENDING",
-          withdrawal_wallet_saved_at:
+          withdrawalProfile: {
+            name: pending.name,
+            network: pending.network,
+            mobile: pending.mobile,
+            locked: true,
+            status: "ACTIVE",
+            savedAt:
+              FieldValue.serverTimestamp(),
+            approvedAt:
+              FieldValue.serverTimestamp(),
+          },
+
+          withdrawal_name: pending.name,
+          withdrawal_network: pending.network,
+          withdrawal_mobile: pending.mobile,
+          withdrawal_profile_locked: true,
+          withdrawal_profile_status: "ACTIVE",
+          withdrawal_profile_saved_at:
             FieldValue.serverTimestamp(),
-          withdrawal_wallet_approved_at:
+          withdrawal_profile_approved_at:
             FieldValue.serverTimestamp(),
-          withdrawal_wallet_updated_at:
+          withdrawal_profile_updated_at:
             FieldValue.serverTimestamp(),
 
-          wallet_change_status: "APPROVED",
-          wallet_change_approved_at:
+          withdrawal_profile_change_status:
+            "APPROVED",
+          withdrawal_profile_change_approved_at:
             FieldValue.serverTimestamp(),
-          wallet_change_approved_by: approver,
+          withdrawal_profile_change_approved_by:
+            approver,
 
-          // Preserve history of the previous active wallet.
-          previous_withdrawal_wallet_address:
-            oldAddress,
-          previous_withdrawal_wallet_changed_at:
+          previous_withdrawal_name: current.name,
+          previous_withdrawal_network:
+            current.network,
+          previous_withdrawal_mobile:
+            current.mobile,
+          previous_withdrawal_changed_at:
             FieldValue.serverTimestamp(),
         },
-        {
-          merge: true,
-        }
+        { merge: true }
       );
 
-      // Do not delete pending address immediately.
-      // Keeping it creates a basic audit trail of what was approved.
       result = {
         success: true,
-        code: "WALLET_CHANGE_APPROVED",
+        code:
+          "WITHDRAWAL_PROFILE_CHANGE_APPROVED",
         message:
-          "The pending wallet has been approved and is now the active locked withdrawal wallet.",
-        wallet: {
-          address: pendingAddress,
-          network:
-            user.pending_withdrawal_wallet_network ||
-            "TRC20",
-          coin:
-            user.pending_withdrawal_wallet_coin ||
-            "USDT",
+          "The new Mobile Money withdrawal details have been approved and are now active.",
+        profile: {
+          name: pending.name,
+          network: pending.network,
+          mobile: pending.mobile,
           locked: true,
-          status: "PENDING",
+          status: "ACTIVE",
           savedAt: null,
           approvedAt: null,
         },
-        previousWallet: {
-          address: oldAddress,
-          network:
-            user.withdrawal_wallet_network || "TRC20",
-          coin:
-            user.withdrawal_wallet_coin || "USDT",
+        previousProfile: {
+          name: current.name,
+          network: current.network,
+          mobile: current.mobile,
         },
         approvedBy: approver,
         httpStatus: 200,
@@ -731,7 +830,7 @@ async function approveWithdrawalWalletChange(
     return result;
   } catch (error) {
     console.error(
-      "❌ Approve withdrawal wallet change:",
+      "❌ Approve withdrawal profile change:",
       error.message
     );
 
@@ -739,10 +838,10 @@ async function approveWithdrawalWalletChange(
       success: false,
       code:
         error.code ||
-        "WITHDRAWAL_WALLET_CHANGE_APPROVAL_FAILED",
+        "WITHDRAWAL_PROFILE_CHANGE_APPROVAL_FAILED",
       message:
         error.message ||
-        "Unable to approve the withdrawal wallet change.",
+        "Unable to approve the withdrawal-details change.",
       httpStatus:
         Number(error.httpStatus) >= 400 &&
         Number(error.httpStatus) <= 599
@@ -753,25 +852,15 @@ async function approveWithdrawalWalletChange(
 }
 
 // ============================================================
-// REJECT PENDING WALLET CHANGE
-//
-// Security-sensitive admin operation.
-// The active wallet remains untouched.
+// REJECT PENDING WITHDRAWAL PROFILE CHANGE
 // ============================================================
 
 async function rejectWithdrawalWalletChange(
   userId,
   rejectedBy = "",
-  reason = "Withdrawal wallet change rejected."
+  reason = "Withdrawal details change rejected."
 ) {
-  if (!firestore) {
-    return {
-      success: false,
-      code: "DATABASE_UNAVAILABLE",
-      message: "Our account database is temporarily unavailable.",
-      httpStatus: 503,
-    };
-  }
+  if (!firestore) return databaseUnavailable();
 
   if (!userId || typeof userId !== "string") {
     return {
@@ -782,16 +871,17 @@ async function rejectWithdrawalWalletChange(
     };
   }
 
-  const approver = String(rejectedBy || "").trim();
+  const reviewer = String(rejectedBy || "").trim();
   const rejectionReason =
     String(reason || "").trim() ||
-    "Withdrawal wallet change rejected.";
+    "Withdrawal details change rejected.";
 
-  if (!approver) {
+  if (!reviewer) {
     return {
       success: false,
       code: "REVIEWER_REQUIRED",
-      message: "A reviewing administrator is required.",
+      message:
+        "A reviewing administrator is required.",
       httpStatus: 400,
     };
   }
@@ -805,28 +895,26 @@ async function rejectWithdrawalWalletChange(
       const userDoc = await transaction.get(userRef);
 
       if (!userDoc.exists) {
-        const error = new Error("User account could not be found.");
+        const error = new Error(
+          "User account could not be found."
+        );
         error.code = "USER_NOT_FOUND";
         error.httpStatus = 404;
         throw error;
       }
 
       const user = userDoc.data() || {};
+      const pending = serializePending(user);
 
-      const pendingAddress = normalizeAddress(
-        user.pending_withdrawal_wallet_address
-      );
-
-      const pendingStatus = safeStatus(
-        user.wallet_change_status,
-        ""
-      );
-
-      if (!pendingAddress || pendingStatus !== "PENDING") {
+      if (
+        !pending ||
+        pending.status !== "PENDING"
+      ) {
         const error = new Error(
-          "There is no pending wallet change request for this user."
+          "There is no pending withdrawal-details change request for this user."
         );
-        error.code = "NO_PENDING_WALLET_CHANGE";
+        error.code =
+          "NO_PENDING_WITHDRAWAL_PROFILE_CHANGE";
         error.httpStatus = 409;
         throw error;
       }
@@ -834,42 +922,35 @@ async function rejectWithdrawalWalletChange(
       transaction.set(
         userRef,
         {
-          wallet_change_status: "REJECTED",
-          wallet_change_rejected_at:
+          withdrawal_profile_change_status:
+            "REJECTED",
+          withdrawal_profile_change_rejected_at:
             FieldValue.serverTimestamp(),
-          wallet_change_rejected_by: approver,
-          wallet_change_rejection_reason:
+          withdrawal_profile_change_rejected_by:
+            reviewer,
+          withdrawal_profile_change_rejection_reason:
             rejectionReason,
-          withdrawal_wallet_updated_at:
+          withdrawal_profile_updated_at:
             FieldValue.serverTimestamp(),
         },
-        {
-          merge: true,
-        }
+        { merge: true }
       );
 
       result = {
         success: true,
-        code: "WALLET_CHANGE_REJECTED",
+        code:
+          "WITHDRAWAL_PROFILE_CHANGE_REJECTED",
         message:
-          "The wallet change was rejected. Your current withdrawal wallet remains active.",
-        currentWallet: {
-          address: normalizeAddress(
-            user.withdrawal_wallet_address
-          ),
-          network:
-            user.withdrawal_wallet_network || "TRC20",
-          coin:
-            user.withdrawal_wallet_coin || "USDT",
-          locked:
-            user.withdrawal_wallet_locked === true,
-        },
+          "The withdrawal-details change was rejected. Your current details remain active.",
+        currentProfile: serializeProfile(user),
         pendingChange: {
-          address: pendingAddress,
+          name: pending.name,
+          network: pending.network,
+          mobile: pending.mobile,
           status: "REJECTED",
           reason: rejectionReason,
         },
-        rejectedBy: approver,
+        rejectedBy: reviewer,
         httpStatus: 200,
       };
     });
@@ -877,7 +958,7 @@ async function rejectWithdrawalWalletChange(
     return result;
   } catch (error) {
     console.error(
-      "❌ Reject withdrawal wallet change:",
+      "❌ Reject withdrawal profile change:",
       error.message
     );
 
@@ -885,10 +966,10 @@ async function rejectWithdrawalWalletChange(
       success: false,
       code:
         error.code ||
-        "WITHDRAWAL_WALLET_CHANGE_REJECTION_FAILED",
+        "WITHDRAWAL_PROFILE_CHANGE_REJECTION_FAILED",
       message:
         error.message ||
-        "Unable to reject the withdrawal wallet change.",
+        "Unable to reject the withdrawal-details change.",
       httpStatus:
         Number(error.httpStatus) >= 400 &&
         Number(error.httpStatus) <= 599
@@ -899,26 +980,14 @@ async function rejectWithdrawalWalletChange(
 }
 
 // ============================================================
-// GET USER WITHDRAWAL WALLET
+// GET USER WITHDRAWAL PROFILE
 // ============================================================
 
 async function getWithdrawalWallet(userId) {
-  if (!firestore) {
-    return {
-      success: false,
-      code: "DATABASE_UNAVAILABLE",
-      message: "Our account database is temporarily unavailable.",
-      httpStatus: 503,
-    };
-  }
+  if (!firestore) return databaseUnavailable();
 
   if (!userId || typeof userId !== "string") {
-    return {
-      success: false,
-      code: "AUTH_REQUIRED",
-      message: "Your account could not be verified.",
-      httpStatus: 401,
-    };
+    return authRequired();
   }
 
   try {
@@ -931,83 +1000,42 @@ async function getWithdrawalWallet(userId) {
       return {
         success: false,
         code: "USER_NOT_FOUND",
-        message: "Your account record could not be found.",
+        message:
+          "Your account record could not be found.",
         httpStatus: 404,
       };
     }
 
     const user = userDoc.data() || {};
-    const address = normalizeAddress(
-      user.withdrawal_wallet_address
-    );
-
-    const pendingAddress = normalizeAddress(
-      user.pending_withdrawal_wallet_address
-    );
 
     return {
       success: true,
-      code: "WITHDRAWAL_WALLET_FETCHED",
-      wallet: address
-        ? {
-            address,
-            network:
-              user.withdrawal_wallet_network || "TRC20",
-            coin:
-              user.withdrawal_wallet_coin || "USDT",
-            locked:
-              user.withdrawal_wallet_locked === true,
-            status: safeStatus(
-              user.withdrawal_wallet_status,
-              "PENDING"
-            ),
-            savedAt: serializeTimestamp(
-              user.withdrawal_wallet_saved_at
-            ),
-            approvedAt: serializeTimestamp(
-              user.withdrawal_wallet_approved_at
-            ),
-          }
-        : null,
-      pendingChange: pendingAddress
-        ? {
-            address: pendingAddress,
-            network:
-              user.pending_withdrawal_wallet_network ||
-              "TRC20",
-            coin:
-              user.pending_withdrawal_wallet_coin ||
-              "USDT",
-            status: safeStatus(
-              user.wallet_change_status,
-              "PENDING"
-            ),
-            requestedAt: serializeTimestamp(
-              user.wallet_change_requested_at
-            ),
-            approvedAt: serializeTimestamp(
-              user.wallet_change_approved_at
-            ),
-            approvedBy:
-              user.wallet_change_approved_by || null,
-            rejectedAt: serializeTimestamp(
-              user.wallet_change_rejected_at
-            ),
-            rejectedBy:
-              user.wallet_change_rejected_by || null,
-            rejectionReason:
-              user.wallet_change_rejection_reason || null,
-          }
-        : null,
-      previousWallet:
-        normalizeAddress(
-          user.previous_withdrawal_wallet_address
+      code: "WITHDRAWAL_PROFILE_FETCHED",
+      profile: serializeProfile(user),
+      pendingChange: serializePending(user),
+      previousProfile:
+        normalizeName(user.previous_withdrawal_name) ||
+        normalizeNetwork(
+          user.previous_withdrawal_network
+        ) ||
+        normalizePhone(
+          user.previous_withdrawal_mobile
         )
           ? {
-              address:
-                user.previous_withdrawal_wallet_address,
+              name:
+                normalizeName(
+                  user.previous_withdrawal_name
+                ) || null,
+              network:
+                normalizeNetwork(
+                  user.previous_withdrawal_network
+                ) || null,
+              mobile:
+                normalizePhone(
+                  user.previous_withdrawal_mobile
+                ) || null,
               changedAt: serializeTimestamp(
-                user.previous_withdrawal_wallet_changed_at
+                user.previous_withdrawal_changed_at
               ),
             }
           : null,
@@ -1015,25 +1043,37 @@ async function getWithdrawalWallet(userId) {
     };
   } catch (error) {
     console.error(
-      "❌ Get withdrawal wallet:",
+      "❌ Get withdrawal profile:",
       error.message
     );
 
     return {
       success: false,
-      code: "WITHDRAWAL_WALLET_FETCH_FAILED",
+      code: "WITHDRAWAL_PROFILE_FETCH_FAILED",
       message:
-        "Unable to load your withdrawal wallet.",
+        "Unable to load your withdrawal details.",
       httpStatus: 500,
     };
   }
 }
 
+// ============================================================
+// EXPORTS
+// ============================================================
+
 module.exports = {
-  validTron,
+  // Kept export name so existing route/index wiring does not
+  // immediately break while the backend is migrated.
   saveWithdrawalWallet,
   requestWithdrawalWalletChange,
   approveWithdrawalWalletChange,
   rejectWithdrawalWalletChange,
   getWithdrawalWallet,
+
+  // New Mobile Money helpers.
+  normalizeName,
+  normalizeNetwork,
+  normalizePhone,
+  validUgandaPhone,
+  validNetworkPhone,
 };

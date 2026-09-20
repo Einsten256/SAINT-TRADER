@@ -1,261 +1,376 @@
-"use strict";
+/**
+ * SAINT CRYPTO
+ * services/routes/withdrawal_wallet.js
+ *
+ * Mobile Money withdrawal identity routes.
+ *
+ * Destination:
+ * SAINT CRYPTO/services/routes/withdrawal_wallet.js
+ *
+ * This replaces the old USDT/TRON wallet endpoints while preserving
+ * the old route family used by the existing Flutter application.
+ *
+ * Supported identity:
+ *   - recipientName
+ *   - network: MTN or AIRTEL
+ *   - mobileNumber
+ *
+ * No USDT, TRON, wallet address, blockchain or TXID is used here.
+ */
 
-// ============================================================
-// SAINT CRYPTO — WITHDRAWAL WALLET ROUTES
-// services/routes/withdrawal_wallet.js
-//
-// Purpose:
-// - Save the user's first USDT TRC20 withdrawal wallet.
-// - Allow the user to REQUEST a wallet change later.
-// - Never replace the active wallet directly from Flutter.
-// - Keep the active wallet protected until the change is approved.
-// - No withdrawal request is created by these routes.
-// - No ledger/funds are touched by these routes.
-// ============================================================
+"use strict";
 
 const express = require("express");
 
-function createRouter({
-  verifyAuth,
-  verifyFirestore,
-  strictLimiter,
-  services,
-}) {
-  const router = express.Router();
+const router = express.Router();
 
-  const { withdrawalWallet } = services;
+const withdrawalService = require("../withdrawal");
 
-  function requireWithdrawalWalletService(req, res, next) {
-    if (
-      !withdrawalWallet ||
-      typeof withdrawalWallet.saveWithdrawalWallet !== "function" ||
-      typeof withdrawalWallet.getWithdrawalWallet !== "function"
-    ) {
-      return res.status(503).json({
-        success: false,
-        code: "WITHDRAWAL_WALLET_SERVICE_UNAVAILABLE",
-        message: "Withdrawal wallet service is not available.",
-      });
-    }
+let verifyAuth = null;
+let verifyFirestore = null;
 
-    next();
+try {
+  const auth = require("./auth");
+
+  verifyAuth =
+    auth.verifyAuth ||
+    auth.authenticate ||
+    auth.requireAuth ||
+    null;
+} catch (_) {}
+
+try {
+  const middleware = require("../middleware");
+
+  verifyAuth =
+    verifyAuth ||
+    middleware.verifyAuth ||
+    middleware.authenticate ||
+    middleware.requireAuth ||
+    null;
+
+  verifyFirestore =
+    middleware.verifyFirestore ||
+    middleware.requireFirestore ||
+    null;
+} catch (_) {}
+
+function requireAuth(req, res, next) {
+  if (!verifyAuth) {
+    return res.status(500).json({
+      success: false,
+      error: "AUTH_MIDDLEWARE_NOT_CONFIGURED",
+    });
   }
 
-  function requireWalletChangeService(req, res, next) {
-    if (
-      !withdrawalWallet ||
-      typeof withdrawalWallet.requestWithdrawalWalletChange !==
-        "function"
-    ) {
-      return res.status(503).json({
-        success: false,
-        code: "WITHDRAWAL_WALLET_CHANGE_UNAVAILABLE",
-        message:
-          "Withdrawal wallet change service is not available.",
-      });
-    }
-
-    next();
-  }
-
-  function responseStatus(result, fallbackSuccess = 200) {
-    const status = Number(result?.httpStatus);
-
-    if (status >= 200 && status <= 599) {
-      return status;
-    }
-
-    return result?.success ? fallbackSuccess : 400;
-  }
-
-  // ============================================================
-  // GET CURRENT WITHDRAWAL WALLET
-  //
-  // GET /api/withdrawal-wallet
-  // ============================================================
-
-  router.get(
-    "/api/withdrawal-wallet",
-    verifyAuth,
-    verifyFirestore,
-    requireWithdrawalWalletService,
-    async (req, res) => {
-      try {
-        const result =
-          await withdrawalWallet.getWithdrawalWallet(req.uid);
-
-        return res
-          .status(responseStatus(result))
-          .json({
-            success: result?.success ?? false,
-            ...result,
-          });
-      } catch (error) {
-        console.error(
-          "❌ Withdrawal wallet GET:",
-          error.message
-        );
-
-        return res.status(500).json({
-          success: false,
-          code: "WITHDRAWAL_WALLET_FETCH_FAILED",
-          message:
-            error.message ||
-            "Unable to load your withdrawal wallet.",
-        });
-      }
-    }
-  );
-
-  // ============================================================
-  // SAVE FIRST WITHDRAWAL WALLET
-  //
-  // POST /api/withdrawal-wallet
-  //
-  // Body:
-  // {
-  //   "address": "T..."
-  // }
-  //
-  // IMPORTANT:
-  // - This endpoint may save ONLY the first wallet.
-  // - An existing locked wallet cannot be replaced here.
-  // - No withdrawal is created.
-  // - No funds are touched.
-  // ============================================================
-
-  router.post(
-    "/api/withdrawal-wallet",
-    verifyAuth,
-    strictLimiter,
-    verifyFirestore,
-    requireWithdrawalWalletService,
-    async (req, res) => {
-      try {
-        const address = String(
-          req.body?.address ||
-            req.body?.withdrawalWalletAddress ||
-            ""
-        ).trim();
-
-        if (!address) {
-          return res.status(400).json({
-            success: false,
-            code: "ADDRESS_REQUIRED",
-            message:
-              "Please enter your USDT TRC20 wallet address.",
-          });
-        }
-
-        const result =
-          await withdrawalWallet.saveWithdrawalWallet(
-            req.uid,
-            address
-          );
-
-        return res
-          .status(responseStatus(result))
-          .json({
-            success: result?.success ?? false,
-            ...result,
-          });
-      } catch (error) {
-        console.error(
-          "❌ Withdrawal wallet POST:",
-          error.message
-        );
-
-        return res.status(500).json({
-          success: false,
-          code:
-            error.code ||
-            "WITHDRAWAL_WALLET_SAVE_FAILED",
-          message:
-            error.message ||
-            "Unable to save your withdrawal wallet.",
-        });
-      }
-    }
-  );
-
-  // ============================================================
-  // REQUEST A NEW WITHDRAWAL WALLET
-  //
-  // POST /api/withdrawal-wallet/change
-  //
-  // Body:
-  // {
-  //   "address": "T..."
-  // }
-  //
-  // IMPORTANT:
-  // - This does NOT replace the active wallet.
-  // - This creates a pending wallet-change request.
-  // - Existing withdrawals continue using their original
-  //   destination snapshot.
-  // - The service must require admin/security approval before
-  //   promoting the new address to the active locked wallet.
-  // - No funds are touched.
-  // ============================================================
-
-  router.post(
-    "/api/withdrawal-wallet/change",
-    verifyAuth,
-    strictLimiter,
-    verifyFirestore,
-    requireWalletChangeService,
-    async (req, res) => {
-      try {
-        const address = String(
-          req.body?.address ||
-            req.body?.newAddress ||
-            req.body?.withdrawalWalletAddress ||
-            ""
-        ).trim();
-
-        if (!address) {
-          return res.status(400).json({
-            success: false,
-            code: "ADDRESS_REQUIRED",
-            message:
-              "Please enter the new USDT TRC20 wallet address.",
-          });
-        }
-
-        const result =
-          await withdrawalWallet.requestWithdrawalWalletChange(
-            req.uid,
-            address
-          );
-
-        return res
-          .status(responseStatus(result))
-          .json({
-            success: result?.success ?? false,
-            ...result,
-          });
-      } catch (error) {
-        console.error(
-          "❌ Withdrawal wallet CHANGE:",
-          error.message
-        );
-
-        return res.status(500).json({
-          success: false,
-          code:
-            error.code ||
-            "WITHDRAWAL_WALLET_CHANGE_FAILED",
-          message:
-            error.message ||
-            "Unable to request a withdrawal wallet change.",
-        });
-      }
-    }
-  );
-
-  return router;
+  return verifyAuth(req, res, next);
 }
 
-module.exports = {
-  createRouter,
-};
+function requireFirestore(req, res, next) {
+  if (!verifyFirestore) {
+    return next();
+  }
+
+  return verifyFirestore(req, res, next);
+}
+
+function getUserId(req) {
+  return (
+    req.user?.uid ||
+    req.user?.userId ||
+    req.user?.id ||
+    req.auth?.uid ||
+    req.auth?.userId ||
+    null
+  );
+}
+
+function asyncRoute(handler) {
+  return async (req, res) => {
+    try {
+      await handler(req, res);
+    } catch (error) {
+      console.error("[withdrawal-wallet route]", error);
+
+      const status = Number(error?.statusCode || error?.status || 500);
+
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        success: false,
+        error: error?.code || "WITHDRAWAL_PROFILE_REQUEST_FAILED",
+        message:
+          error?.message || "Withdrawal profile request failed.",
+      });
+    }
+  };
+}
+
+function badRequest(res, code, message) {
+  return res.status(400).json({
+    success: false,
+    error: code,
+    message,
+  });
+}
+
+/**
+ * GET /api/withdrawal-wallet
+ *
+ * Compatibility endpoint.
+ *
+ * Old Flutter code may call this endpoint expecting a wallet object.
+ * It now returns the saved Mobile Money withdrawal identity.
+ */
+router.get(
+  "/",
+  requireAuth,
+  requireFirestore,
+  asyncRoute(async (req, res) => {
+    const userId = getUserId(req);
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: "UNAUTHENTICATED",
+        message: "Authenticated user is required.",
+      });
+    }
+
+    const profile =
+      await withdrawalService.getWithdrawalProfile(userId);
+
+    return res.json({
+      success: true,
+      profile: profile || null,
+
+      // Compatibility field.
+      // This is deliberately null because there is no blockchain wallet.
+      wallet: null,
+    });
+  })
+);
+
+/**
+ * POST /api/withdrawal-wallet
+ *
+ * Saves the Mobile Money withdrawal identity.
+ *
+ * Body:
+ * {
+ *   "recipientName": "John Doe",
+ *   "network": "MTN",
+ *   "mobileNumber": "0771234567"
+ * }
+ *
+ * Compatibility:
+ * Also accepts:
+ *   name
+ *   phone
+ *   phoneNumber
+ */
+router.post(
+  "/",
+  requireAuth,
+  requireFirestore,
+  asyncRoute(async (req, res) => {
+    const userId = getUserId(req);
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: "UNAUTHENTICATED",
+        message: "Authenticated user is required.",
+      });
+    }
+
+    const body = req.body || {};
+
+    const recipientName =
+      body.recipientName ||
+      body.name ||
+      body.fullName;
+
+    const network =
+      body.network ||
+      body.provider;
+
+    const mobileNumber =
+      body.mobileNumber ||
+      body.phoneNumber ||
+      body.phone;
+
+    if (!recipientName || !network || !mobileNumber) {
+      return badRequest(
+        res,
+        "WITHDRAWAL_PROFILE_REQUIRED",
+        "Recipient name, network and mobile number are required."
+      );
+    }
+
+    const profile =
+      await withdrawalService.saveWithdrawalProfile(userId, {
+        recipientName,
+        network,
+        mobileNumber,
+      });
+
+    return res.json({
+      success: true,
+      message: "Mobile Money withdrawal identity saved.",
+      profile,
+
+      // Compatibility field.
+      wallet: null,
+    });
+  })
+);
+
+/**
+ * POST /api/withdrawal-wallet/change
+ *
+ * Existing Flutter compatibility endpoint.
+ *
+ * Changing the saved identity does NOT move money and does NOT create
+ * a withdrawal. It only updates the recipient details used for future
+ * withdrawal requests.
+ */
+router.post(
+  "/change",
+  requireAuth,
+  requireFirestore,
+  asyncRoute(async (req, res) => {
+    const userId = getUserId(req);
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: "UNAUTHENTICATED",
+        message: "Authenticated user is required.",
+      });
+    }
+
+    const body = req.body || {};
+
+    const recipientName =
+      body.recipientName ||
+      body.name ||
+      body.fullName;
+
+    const network =
+      body.network ||
+      body.provider;
+
+    const mobileNumber =
+      body.mobileNumber ||
+      body.phoneNumber ||
+      body.phone;
+
+    if (!recipientName || !network || !mobileNumber) {
+      return badRequest(
+        res,
+        "WITHDRAWAL_PROFILE_REQUIRED",
+        "Recipient name, network and mobile number are required."
+      );
+    }
+
+    const profile =
+      await withdrawalService.saveWithdrawalProfile(userId, {
+        recipientName,
+        network,
+        mobileNumber,
+      });
+
+    return res.json({
+      success: true,
+      message: "Mobile Money withdrawal identity updated.",
+      profile,
+
+      // Compatibility field.
+      wallet: null,
+    });
+  })
+);
+
+/**
+ * GET /api/withdrawal-wallet/profile
+ *
+ * Optional explicit profile endpoint.
+ */
+router.get(
+  "/profile",
+  requireAuth,
+  requireFirestore,
+  asyncRoute(async (req, res) => {
+    const userId = getUserId(req);
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: "UNAUTHENTICATED",
+        message: "Authenticated user is required.",
+      });
+    }
+
+    const profile =
+      await withdrawalService.getWithdrawalProfile(userId);
+
+    return res.json({
+      success: true,
+      profile: profile || null,
+    });
+  })
+);
+
+/**
+ * POST /api/withdrawal-wallet/request
+ *
+ * Compatibility helper for clients that previously used the wallet
+ * route to initiate withdrawals.
+ *
+ * The new withdrawal service is responsible for the actual reservation,
+ * fee calculation and ledger transaction.
+ */
+router.post(
+  "/request",
+  requireAuth,
+  requireFirestore,
+  asyncRoute(async (req, res) => {
+    const userId = getUserId(req);
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: "UNAUTHENTICATED",
+        message: "Authenticated user is required.",
+      });
+    }
+
+    const amountUgx = req.body?.amountUgx;
+
+    if (
+      amountUgx === undefined ||
+      amountUgx === null ||
+      amountUgx === ""
+    ) {
+      return badRequest(
+        res,
+        "WITHDRAWAL_AMOUNT_REQUIRED",
+        "Withdrawal amount is required."
+      );
+    }
+
+    const withdrawal =
+      await withdrawalService.reserveWithdrawal(
+        userId,
+        amountUgx
+      );
+
+    return res.status(201).json({
+      success: true,
+      message:
+        "Withdrawal request submitted and placed under admin review.",
+      withdrawal,
+    });
+  })
+);
+
+module.exports = router;

@@ -1186,7 +1186,9 @@ let deposit = null;
 let signal = null;
 let withdrawal = null;
 let telegramWithdrawal = null;
+let telegramRecharge = null;
 let withdrawalWallet = null;
+let scheduler = null;
 
 try {
 
@@ -1195,76 +1197,84 @@ try {
   // ----------------------------------------------------------
 
   kendrick =
-    require(
-      "./services/kendrick"
-    );
+    require("./services/kendrick");
 
   // ----------------------------------------------------------
-  // CONFIG
+  // NEW CONFIGURATION
   // ----------------------------------------------------------
 
   config =
-    require(
-      "./services/config"
-    );
+    require("./services/config");
 
   // ----------------------------------------------------------
   // BYBIT
   // ----------------------------------------------------------
+  //
+  // Kept for the existing market/trading engine.
+  // It is NOT used for the new recharge/withdrawal system.
+  //
 
   bybit =
-    require(
-      "./services/bybit"
-    );
+    require("./services/bybit");
 
   // ----------------------------------------------------------
   // LEDGER
   // ----------------------------------------------------------
 
   ledger =
-    require(
-      "./services/ledger"
-    );
+    require("./services/ledger");
 
   // ----------------------------------------------------------
-  // DEPOSIT
+  // MOBILE MONEY RECHARGE
   // ----------------------------------------------------------
 
   deposit =
-    require(
-      "./services/deposit"
-    );
+    require("./services/deposit");
 
   // ----------------------------------------------------------
-  // SIGNAL
+  // DAILY SIGNAL
   // ----------------------------------------------------------
 
   signal =
-    require(
-      "./services/signal"
-    );
+    require("./services/signal");
 
   // ----------------------------------------------------------
-  // WITHDRAWAL
+  // MOBILE MONEY WITHDRAWAL
   // ----------------------------------------------------------
 
   withdrawal =
-    require(
-      "./services/withdrawal"
-    );
+    require("./services/withdrawal");
+
+  // ----------------------------------------------------------
+  // TELEGRAM WITHDRAWAL APPROVAL
+  // ----------------------------------------------------------
 
   telegramWithdrawal =
-    require(
-      "./services/telegram_withdrawal"
-    );
+    require("./services/telegram_withdrawal");
+
+  // ----------------------------------------------------------
+  // TELEGRAM RECHARGE APPROVAL
+  // ----------------------------------------------------------
+
+  telegramRecharge =
+    require("./services/telegram_recharge");
+
+  // ----------------------------------------------------------
+  // MOBILE MONEY WITHDRAWAL PROFILE
+  // ----------------------------------------------------------
 
   withdrawalWallet =
-    require(
-      "./services/withdrawal_wallet"
-    );
+    require("./services/withdrawal_wallet");
+
+  // ----------------------------------------------------------
+  // NEW 9PM EAT SCHEDULER
+  // ----------------------------------------------------------
+
+  scheduler =
+    require("./services/scheduler");
 
   console.log(
-    "✅ All services loaded."
+    "✅ All Saint Crypto financial services loaded."
   );
 
 } catch (error) {
@@ -1300,8 +1310,14 @@ const serviceRegistry = {
   signal,
 
   withdrawal,
+
   telegramWithdrawal,
+
+  telegramRecharge,
+
   withdrawalWallet,
+
+  scheduler,
 };
 
 // ============================================================
@@ -1317,58 +1333,54 @@ console.log(
 );
 
 console.log(
-  `Kendrick: ${
-    kendrick
-      ? "READY"
-      : "MISSING"
+  `Kendrick: ${kendrick ? "READY" : "MISSING"}`
+);
+
+console.log(
+  `Config: ${config ? "READY" : "MISSING"}`
+);
+
+console.log(
+  `Bybit market engine: ${bybit ? "READY" : "MISSING"}`
+);
+
+console.log(
+  `Ledger: ${ledger ? "READY" : "MISSING"}`
+);
+
+console.log(
+  `Mobile Money recharge: ${deposit ? "READY" : "MISSING"}`
+);
+
+console.log(
+  `Daily signal: ${signal ? "READY" : "MISSING"}`
+);
+
+console.log(
+  `Mobile Money withdrawal: ${withdrawal ? "READY" : "MISSING"}`
+);
+
+console.log(
+  `Telegram withdrawal: ${
+    telegramWithdrawal ? "READY" : "MISSING"
   }`
 );
 
 console.log(
-  `Config: ${
-    config
-      ? "READY"
-      : "MISSING"
+  `Telegram recharge: ${
+    telegramRecharge ? "READY" : "MISSING"
   }`
 );
 
 console.log(
-  `Bybit: ${
-    bybit
-      ? "READY"
-      : "MISSING"
+  `Withdrawal profile: ${
+    withdrawalWallet ? "READY" : "MISSING"
   }`
 );
 
 console.log(
-  `Ledger: ${
-    ledger
-      ? "READY"
-      : "MISSING"
-  }`
-);
-
-console.log(
-  `Deposit: ${
-    deposit
-      ? "READY"
-      : "MISSING"
-  }`
-);
-
-console.log(
-  `Signal: ${
-    signal
-      ? "READY"
-      : "MISSING"
-  }`
-);
-
-console.log(
-  `Withdrawal: ${
-    withdrawal
-      ? "READY"
-      : "MISSING"
+  `9PM EAT scheduler: ${
+    scheduler ? "READY" : "MISSING"
   }`
 );
 
@@ -1377,70 +1389,26 @@ console.log(
 );
 
 console.log(
-  `Deposit submitDeposit: ${
-    typeof deposit?.submitDeposit
+  `Signal processor: ${
+    typeof signal?.startSignalPayoutProcessor
   }`
 );
 
 console.log(
-  `Deposit getDepositStatus: ${
-    typeof deposit?.getDepositStatus
+  `Signal scheduler: ${
+    typeof scheduler?.startScheduler
   }`
 );
 
 console.log(
-  `Deposit getDepositHistory: ${
-    typeof deposit?.getDepositHistory
+  `Recharge Telegram: ${
+    typeof telegramRecharge?.startTelegramRechargeBot
   }`
 );
 
 console.log(
-  `Deposit monitorPendingDeposits: ${
-    typeof deposit?.monitorPendingDeposits
-  }`
-);
-
-console.log(
-  `Deposit monitorDeposits: ${
-    typeof deposit?.monitorDeposits
-  }`
-);
-
-console.log(
-  `Deposit getConfig: ${
-    typeof deposit?.getConfig
-  }`
-);
-
-console.log(
-  `Withdrawal requestWithdrawal: ${
-    typeof withdrawal?.requestWithdrawal
-  }`
-);
-
-console.log(
-  `Withdrawal startMonitor: ${
-    typeof withdrawal?.startMonitor
-  }`
-);
-
-console.log(
-  `Withdrawal stopMonitor: ${
-    typeof withdrawal?.stopMonitor
-  }`
-);
-
-console.log(
-  `Withdrawal monitorWithdrawals: ${
-    typeof withdrawal?.monitorWithdrawals
-  }`
-);
-
-console.log(
-  `Telegram withdrawal approval: ${
-    telegramWithdrawal
-      ? "READY"
-      : "UNAVAILABLE"
+  `Withdrawal Telegram: ${
+    typeof telegramWithdrawal?.startTelegramWithdrawalBot
   }`
 );
 
@@ -1473,59 +1441,102 @@ const routeDeps = {
 // ============================================================
 // 26. ROUTE LOADER
 // ============================================================
+//
+// Supports BOTH:
+//   1. Existing createRouter(routeDeps) modules.
+//   2. New direct Express routers.
+//
+// This lets the financial migration remain additive and avoids
+// breaking the existing Saint Crypto user/Kendrick routes.
+//
 
 function mountRoute(
   routePath,
-  routeName
+  routeName,
+  directMountPath = null
 ) {
 
   try {
 
     const routeModule =
-      require(
-        routePath
-      );
+      require(routePath);
+
+    // ----------------------------------------------------------
+    // EXISTING ROUTE STYLE
+    // ----------------------------------------------------------
 
     if (
-      !routeModule ||
-      typeof routeModule.createRouter !==
+      routeModule &&
+      typeof routeModule.createRouter ===
         "function"
     ) {
 
-      console.error(
-        `❌ ${routeName} does not export createRouter().`
+      const router =
+        routeModule.createRouter(
+          routeDeps
+        );
+
+      if (
+        !router ||
+        typeof router.use !==
+          "function"
+      ) {
+
+        console.error(
+          `❌ ${routeName} returned an invalid Express router.`
+        );
+
+        return false;
+      }
+
+      app.use(router);
+
+      console.log(
+        `✅ Route loaded: ${routeName}`
       );
 
-      return false;
+      return true;
     }
 
-    const router =
-      routeModule.createRouter(
-        routeDeps
-      );
+    // ----------------------------------------------------------
+    // DIRECT EXPRESS ROUTER STYLE
+    // ----------------------------------------------------------
+
+    const directRouter =
+      routeModule?.router &&
+      typeof routeModule.router.use ===
+        "function"
+        ? routeModule.router
+        : (
+            routeModule &&
+            typeof routeModule.use ===
+              "function"
+              ? routeModule
+              : null
+          );
 
     if (
-      !router ||
-      typeof router.use !==
-        "function"
+      directRouter &&
+      directMountPath
     ) {
 
-      console.error(
-        `❌ ${routeName} returned an invalid Express router.`
+      app.use(
+        `${API_PREFIX}${directMountPath}`,
+        directRouter
       );
 
-      return false;
+      console.log(
+        `✅ Route loaded: ${routeName} -> ${API_PREFIX}${directMountPath}`
+      );
+
+      return true;
     }
 
-    app.use(
-      router
+    console.error(
+      `❌ ${routeName} is not a supported route module.`
     );
 
-    console.log(
-      `✅ Route loaded: ${routeName}`
-    );
-
-    return true;
+    return false;
 
   } catch (error) {
 
@@ -1546,34 +1557,58 @@ function mountRoute(
 // 27. ROUTES
 // ============================================================
 
+// Existing Kendrick route.
+// Keep its original createRouter contract intact.
 mountRoute(
   "./services/routes/kendrick",
-  "Kendrick"
+  "Kendrick",
+  "/kendrick"
 );
 
+// Existing/new authentication wrapper.
 mountRoute(
   "./services/routes/auth",
-  "Auth"
+  "Auth",
+  "/auth"
 );
 
+// New Mobile Money recharge routes.
 mountRoute(
   "./services/routes/deposits",
-  "Deposits"
+  "Mobile Money Deposits",
+  "/deposits"
 );
 
+// New daily signal routes.
 mountRoute(
   "./services/routes/signal",
-  "Signal"
+  "Signals",
+  "/signals"
 );
 
+// New Mobile Money withdrawal routes.
 mountRoute(
   "./services/routes/withdrawal",
-  "Withdrawal"
+  "Withdrawals",
+  "/withdrawals"
 );
 
+// Compatibility withdrawal identity routes.
 mountRoute(
   "./services/routes/withdrawal_wallet",
-  "Withdrawal Wallet"
+  "Withdrawal Wallet / Mobile Money Profile",
+  "/withdrawal-wallet"
+);
+
+// Safe frontend configuration.
+mountRoute(
+  "./services/routes/config",
+  "Public Configuration",
+  "/config"
+);
+
+console.log(
+  "ℹ️ Transfer route remains handled by routes/kendrick.js."
 );
 
 // ============================================================
@@ -1713,6 +1748,28 @@ function healthHandler(
       withdrawal:
         Boolean(
           withdrawal
+        ),
+
+      telegramWithdrawal:
+        Boolean(
+          telegramWithdrawal
+        ),
+
+      telegramRecharge:
+        Boolean(
+          telegramRecharge
+        ),
+
+      scheduler:
+        Boolean(
+          scheduler
+        ),
+
+      signalPayoutProcessor:
+        Boolean(
+          signal &&
+          typeof signal.startSignalPayoutProcessor ===
+            "function"
         ),
     },
 
@@ -1942,25 +1999,28 @@ app.post(
 // ============================================================
 // 33B. BUSINESS MANAGER ADMIN API
 // ============================================================
+//
 // Private desktop-admin endpoints.
 //
-// The Control Room already authenticates Kendrick locally.
-// These endpoints add the server-side authorization layer needed
-// for the desktop Business Manager to call the EXISTING Render
-// backend without introducing a second approval workflow.
+// The Business Manager uses one server-side key. Financial mutations
+// are delegated to the same service functions used by Telegram so
+// there is only ONE source of truth for ledger changes.
 //
-// IMPORTANT:
-// - No withdrawal logic is duplicated here.
-// - No balance mutation is performed here.
-// - No signal schema is duplicated here.
-// - Existing service functions remain the source of truth.
-// ============================================================
+// NEW FINANCIAL MODEL:
+//   - recharge approval -> locked trading capital
+//   - signal payout -> payout balance
+//   - withdrawal approval -> manual Mobile Money disbursement
+//   - withdrawal rejection -> payout funds restored
+//
+// No USDT/TRON/TXID workflow exists here.
+//
 
 function requireBusinessManagerAdmin(
   req,
   res,
   next
 ) {
+
   const configuredKey =
     String(
       process.env.SAINT_CRYPTO_INTERNAL_ADMIN_KEY ||
@@ -1980,10 +2040,12 @@ function requireBusinessManagerAdmin(
     !suppliedKey ||
     suppliedKey !== configuredKey
   ) {
+
     return res.status(401).json({
       success: false,
       code: "ADMIN_UNAUTHORIZED",
-      message: "Business Manager admin authorization failed.",
+      message:
+        "Business Manager admin authorization failed.",
     });
   }
 
@@ -1991,90 +2053,241 @@ function requireBusinessManagerAdmin(
 }
 
 // ------------------------------------------------------------
-// MANUAL SIGNAL GENERATION
-// Uses the existing firebase_manager signal generator.
-// Does not alter the normal scheduled signal windows.
+// GENERATE DAILY SIGNAL MANUALLY
 // ------------------------------------------------------------
 
 app.post(
   `${API_PREFIX}/admin/business-manager/signals/generate`,
   requireBusinessManagerAdmin,
   async (req, res) => {
+
     try {
+
       if (
-        !firebaseManager ||
-        typeof firebaseManager.generateSignalNow !==
+        !signal ||
+        typeof signal.createSignal !==
           "function"
       ) {
+
         return res.status(503).json({
           success: false,
           code: "SIGNAL_SERVICE_UNAVAILABLE",
-          message: "Signal manager is unavailable.",
+          message:
+            "Signal service is unavailable.",
         });
       }
 
-      const sessionLabel =
+      const force =
         String(
-          req.body?.session ||
-            req.body?.sessionLabel ||
-            "BUSINESS MANAGER"
-        )
-          .trim()
-          .substring(0, 100) ||
-        "BUSINESS MANAGER";
-
-      console.log(
-        `🟣 Business Manager signal generation requested: ${sessionLabel}`
-      );
+          req.body?.force || "false"
+        ).toLowerCase() === "true";
 
       const result =
-        await firebaseManager.generateSignalNow(
-          sessionLabel
-        );
+        await signal.createSignal({
+          force,
+        });
 
       return res.status(201).json({
         success: true,
-        message: "Business Manager signal created successfully.",
+        message:
+          "Signal created successfully.",
         signal: result,
       });
+
     } catch (error) {
+
       console.error(
         "❌ Business Manager signal generation failed:",
         error.stack || error.message
       );
 
-      return res.status(500).json({
+      return res.status(400).json({
         success: false,
-        code: "BUSINESS_MANAGER_SIGNAL_FAILED",
+        code:
+          "BUSINESS_MANAGER_SIGNAL_FAILED",
         message:
-          NODE_ENV === "production"
-            ? "Unable to create the signal."
-            : error.message ||
-              "Unable to create the signal.",
+          error.message ||
+          "Unable to create the signal.",
       });
     }
   }
 );
 
 // ------------------------------------------------------------
-// WITHDRAWAL APPROVAL
-// Calls the existing transactional withdrawal service.
+// RECHARGE APPROVAL
+// ------------------------------------------------------------
+
+app.post(
+  `${API_PREFIX}/admin/business-manager/recharges/:rechargeId/approve`,
+  requireBusinessManagerAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (
+        !deposit ||
+        typeof deposit.approveRecharge !==
+          "function"
+      ) {
+
+        return res.status(503).json({
+          success: false,
+          code: "RECHARGE_SERVICE_UNAVAILABLE",
+          message:
+            "Recharge service is unavailable.",
+        });
+      }
+
+      const rechargeId =
+        String(
+          req.params.rechargeId || ""
+        ).trim();
+
+      if (!rechargeId) {
+
+        return res.status(400).json({
+          success: false,
+          code: "RECHARGE_ID_REQUIRED",
+          message:
+            "Recharge ID is required.",
+        });
+      }
+
+      const result =
+        await deposit.approveRecharge(
+          rechargeId,
+          {
+            adminId: "BUSINESS_MANAGER",
+            adminUsername:
+              "Kendrick Saint",
+          }
+        );
+
+      return res.status(200).json({
+        success: true,
+        message:
+          "Recharge approved and locked trading capital credited.",
+        recharge: result,
+      });
+
+    } catch (error) {
+
+      console.error(
+        "❌ Business Manager recharge approval failed:",
+        error.stack || error.message
+      );
+
+      return res.status(400).json({
+        success: false,
+        code:
+          "BUSINESS_MANAGER_RECHARGE_APPROVAL_FAILED",
+        message:
+          error.message ||
+          "Unable to approve this recharge.",
+      });
+    }
+  }
+);
+
+app.post(
+  `${API_PREFIX}/admin/business-manager/recharges/:rechargeId/reject`,
+  requireBusinessManagerAdmin,
+  async (req, res) => {
+
+    try {
+
+      if (
+        !deposit ||
+        typeof deposit.rejectRecharge !==
+          "function"
+      ) {
+
+        return res.status(503).json({
+          success: false,
+          code: "RECHARGE_SERVICE_UNAVAILABLE",
+          message:
+            "Recharge service is unavailable.",
+        });
+      }
+
+      const rechargeId =
+        String(
+          req.params.rechargeId || ""
+        ).trim();
+
+      const reason =
+        String(
+          req.body?.reason ||
+            "Recharge rejected by Business Manager administrator."
+        )
+          .trim()
+          .substring(0, 500);
+
+      if (!rechargeId) {
+
+        return res.status(400).json({
+          success: false,
+          code: "RECHARGE_ID_REQUIRED",
+          message:
+            "Recharge ID is required.",
+        });
+      }
+
+      const result =
+        await deposit.rejectRecharge(
+          rechargeId,
+          reason
+        );
+
+      return res.status(200).json({
+        success: true,
+        message:
+          "Recharge rejected. No ledger credit was made.",
+        recharge: result,
+      });
+
+    } catch (error) {
+
+      console.error(
+        "❌ Business Manager recharge rejection failed:",
+        error.stack || error.message
+      );
+
+      return res.status(400).json({
+        success: false,
+        code:
+          "BUSINESS_MANAGER_RECHARGE_REJECTION_FAILED",
+        message:
+          error.message ||
+          "Unable to reject this recharge.",
+      });
+    }
+  }
+);
+
+// ------------------------------------------------------------
+// WITHDRAWAL APPROVAL / MANUAL DISBURSEMENT CONFIRMATION
 // ------------------------------------------------------------
 
 app.post(
   `${API_PREFIX}/admin/business-manager/withdrawals/:withdrawalId/approve`,
   requireBusinessManagerAdmin,
   async (req, res) => {
+
     try {
+
       if (
         !withdrawal ||
-        typeof withdrawal.approveAndSubmitWithdrawal !==
+        typeof withdrawal.approveAndDisburseWithdrawal !==
           "function"
       ) {
+
         return res.status(503).json({
           success: false,
-          code: "WITHDRAWAL_SERVICE_UNAVAILABLE",
-          message: "Withdrawal service is unavailable.",
+          code:
+            "WITHDRAWAL_SERVICE_UNAVAILABLE",
+          message:
+            "Withdrawal service is unavailable.",
         });
       }
 
@@ -2084,30 +2297,44 @@ app.post(
         ).trim();
 
       if (!withdrawalId) {
+
         return res.status(400).json({
           success: false,
           code: "WITHDRAWAL_ID_REQUIRED",
-          message: "Withdrawal ID is required.",
+          message:
+            "Withdrawal ID is required.",
         });
       }
 
-      const adminIdentity = {
-        id: "BUSINESS_MANAGER",
-        username: "Kendrick Saint",
-      };
+      const paymentReference =
+        String(
+          req.body?.paymentReference ||
+            `MANUAL_MM_${Date.now()}`
+        )
+          .trim()
+          .substring(0, 200);
 
       const result =
-        await withdrawal.approveAndSubmitWithdrawal(
+        await withdrawal.approveAndDisburseWithdrawal(
           withdrawalId,
-          adminIdentity
+          {
+            paymentReference,
+            adminId:
+              "BUSINESS_MANAGER",
+            adminUsername:
+              "Kendrick Saint",
+          }
         );
 
       return res.status(200).json({
         success: true,
-        message: "Withdrawal approved and moved to payment.",
+        message:
+          "Withdrawal marked DISBURSED after manual Mobile Money payment confirmation.",
         withdrawal: result,
       });
+
     } catch (error) {
+
       console.error(
         "❌ Business Manager withdrawal approval failed:",
         error.stack || error.message
@@ -2115,7 +2342,8 @@ app.post(
 
       return res.status(400).json({
         success: false,
-        code: "BUSINESS_MANAGER_WITHDRAWAL_APPROVAL_FAILED",
+        code:
+          "BUSINESS_MANAGER_WITHDRAWAL_APPROVAL_FAILED",
         message:
           error.message ||
           "Unable to approve this withdrawal.",
@@ -2126,23 +2354,27 @@ app.post(
 
 // ------------------------------------------------------------
 // WITHDRAWAL REJECTION
-// Uses the existing restore/refund transaction inside the service.
 // ------------------------------------------------------------
 
 app.post(
   `${API_PREFIX}/admin/business-manager/withdrawals/:withdrawalId/reject`,
   requireBusinessManagerAdmin,
   async (req, res) => {
+
     try {
+
       if (
         !withdrawal ||
         typeof withdrawal.rejectWithdrawal !==
           "function"
       ) {
+
         return res.status(503).json({
           success: false,
-          code: "WITHDRAWAL_SERVICE_UNAVAILABLE",
-          message: "Withdrawal service is unavailable.",
+          code:
+            "WITHDRAWAL_SERVICE_UNAVAILABLE",
+          message:
+            "Withdrawal service is unavailable.",
         });
       }
 
@@ -2152,10 +2384,12 @@ app.post(
         ).trim();
 
       if (!withdrawalId) {
+
         return res.status(400).json({
           success: false,
           code: "WITHDRAWAL_ID_REQUIRED",
-          message: "Withdrawal ID is required.",
+          message:
+            "Withdrawal ID is required.",
         });
       }
 
@@ -2166,8 +2400,7 @@ app.post(
             "Withdrawal rejected by Business Manager administrator."
         )
           .trim()
-          .substring(0, 500) ||
-        "Withdrawal rejected by Business Manager administrator.";
+          .substring(0, 500);
 
       const result =
         await withdrawal.rejectWithdrawal(
@@ -2177,10 +2410,13 @@ app.post(
 
       return res.status(200).json({
         success: true,
-        message: "Withdrawal rejected and funds restored.",
+        message:
+          "Withdrawal rejected and reserved funds restored.",
         withdrawal: result,
       });
+
     } catch (error) {
+
       console.error(
         "❌ Business Manager withdrawal rejection failed:",
         error.stack || error.message
@@ -2188,7 +2424,8 @@ app.post(
 
       return res.status(400).json({
         success: false,
-        code: "BUSINESS_MANAGER_WITHDRAWAL_REJECTION_FAILED",
+        code:
+          "BUSINESS_MANAGER_WITHDRAWAL_REJECTION_FAILED",
         message:
           error.message ||
           "Unable to reject this withdrawal.",
@@ -2197,497 +2434,284 @@ app.post(
   }
 );
 
-// ------------------------------------------------------------
-// WITHDRAWAL TXID SUBMISSION
-// The existing service performs the blockchain verification.
-// No direct Firestore status mutation is performed here.
-// ------------------------------------------------------------
-
-app.post(
-  `${API_PREFIX}/admin/business-manager/withdrawals/:withdrawalId/txid`,
-  requireBusinessManagerAdmin,
-  async (req, res) => {
-    try {
-      if (
-        !withdrawal ||
-        typeof withdrawal.submitWithdrawalTxid !==
-          "function"
-      ) {
-        return res.status(503).json({
-          success: false,
-          code: "WITHDRAWAL_SERVICE_UNAVAILABLE",
-          message: "Withdrawal service is unavailable.",
-        });
-      }
-
-      const withdrawalId =
-        String(
-          req.params.withdrawalId || ""
-        ).trim();
-
-      const txid =
-        String(
-          req.body?.txid ||
-            req.body?.transactionId ||
-            ""
-        ).trim();
-
-      if (!withdrawalId) {
-        return res.status(400).json({
-          success: false,
-          code: "WITHDRAWAL_ID_REQUIRED",
-          message: "Withdrawal ID is required.",
-        });
-      }
-
-      if (!txid) {
-        return res.status(400).json({
-          success: false,
-          code: "TXID_REQUIRED",
-          message: "Transaction TXID is required.",
-        });
-      }
-
-      const adminIdentity = {
-        id: "BUSINESS_MANAGER",
-        username: "Kendrick Saint",
-      };
-
-      const result =
-        await withdrawal.submitWithdrawalTxid(
-          withdrawalId,
-          txid,
-          adminIdentity
-        );
-
-      return res.status(200).json({
-        success: true,
-        message:
-          result?.status === "COMPLETED"
-            ? "TXID verified and withdrawal completed."
-            : "TXID submitted for withdrawal verification.",
-        withdrawal: result,
-      });
-    } catch (error) {
-      console.error(
-        "❌ Business Manager withdrawal TXID submission failed:",
-        error.stack || error.message
-      );
-
-      return res.status(400).json({
-        success: false,
-        code: "BUSINESS_MANAGER_WITHDRAWAL_TXID_FAILED",
-        message:
-          error.message ||
-          "Unable to submit the withdrawal TXID.",
-      });
-    }
-  }
-);
-
 // ============================================================
-// 34. DEPOSIT MONITOR STATE
+// 34. NEW FINANCIAL PROCESSORS
 // ============================================================
+//
+// IMPORTANT:
+// The old crypto deposit monitor and blockchain withdrawal monitor are
+// intentionally NOT started anymore.
+//
+// Recharge is manually approved by Telegram/Business Manager.
+// Withdrawal is manually paid through Mobile Money.
+// Signal payouts are processed durably from Firestore.
+//
 
-let depositMonitorTimer =
-  null;
-
-let depositMonitorRunning =
-  false;
-
-// ============================================================
-// 35. RUN DEPOSIT MONITOR
-// ============================================================
-
-async function runDepositMonitorNow() {
-
-  if (
-    depositMonitorRunning
-  ) {
-
-    return;
-  }
-
-  if (
-    !deposit
-  ) {
-
-    console.warn(
-      "⚠️ Deposit service unavailable."
-    );
-
-    return;
-  }
-
-  let monitorFunction =
-    null;
-
-  if (
-    typeof deposit.monitorPendingDeposits ===
-    "function"
-  ) {
-
-    monitorFunction =
-      deposit.monitorPendingDeposits.bind(
-        deposit
-      );
-
-  } else if (
-    typeof deposit.monitorDeposits ===
-    "function"
-  ) {
-
-    monitorFunction =
-      deposit.monitorDeposits.bind(
-        deposit
-      );
-  }
-
-  if (
-    !monitorFunction
-  ) {
-
-    console.warn(
-      "⚠️ No deposit monitor function is exported."
-    );
-
-    return;
-  }
-
-  depositMonitorRunning =
-    true;
-
-  try {
-
-    const result =
-      await monitorFunction();
-
-    console.log(
-      "📥 Deposit monitor:",
-      result
-    );
-
-  } catch (error) {
-
-    console.error(
-      "❌ Deposit monitor:",
-      error.message
-    );
-
-  } finally {
-
-    depositMonitorRunning =
-      false;
-  }
-}
-
-// ============================================================
-// 36. START DEPOSIT MONITOR
-// ============================================================
-
-function startDepositMonitor() {
-
-  if (
-    !deposit
-  ) {
-
-    console.warn(
-      "⚠️ Deposit service unavailable."
-    );
-
-    return false;
-  }
-
-  const hasMonitor =
-    typeof deposit.monitorPendingDeposits ===
-      "function" ||
-    typeof deposit.monitorDeposits ===
-      "function";
-
-  if (
-    !hasMonitor
-  ) {
-
-    console.warn(
-      "⚠️ No deposit monitor function is exported."
-    );
-
-    return false;
-  }
-
-  let minutes =
-    Number(
-      process.env.DEPOSIT_MONITOR_MINUTES ||
-        1
-    );
-
-  if (
-    !Number.isFinite(
-      minutes
-    ) ||
-    minutes < 1
-  ) {
-
-    minutes =
-      1;
-  }
-
-  console.log(
-    `⏰ Deposit monitor: every ${minutes} minute(s).`
-  );
+function startFinancialProcessors() {
 
   // ----------------------------------------------------------
-  // IMMEDIATE CHECK
-  // ----------------------------------------------------------
-
-  setTimeout(
-    () => {
-
-      runDepositMonitorNow();
-
-    },
-    5000
-  );
-
-  // ----------------------------------------------------------
-  // PREVENT DUPLICATES
+  // SIGNAL PAYOUT PROCESSOR
   // ----------------------------------------------------------
 
   if (
-    depositMonitorTimer
-  ) {
-
-    clearInterval(
-      depositMonitorTimer
-    );
-  }
-
-  // ----------------------------------------------------------
-  // TIMER
-  // ----------------------------------------------------------
-
-  depositMonitorTimer =
-    setInterval(
-      () => {
-
-        runDepositMonitorNow();
-
-      },
-      minutes *
-        60 *
-        1000
-    );
-
-  console.log(
-    "✅ Deposit monitor started."
-  );
-
-  return true;
-}
-
-// ============================================================
-// 37. STOP DEPOSIT MONITOR
-// ============================================================
-
-function stopDepositMonitor() {
-
-  if (
-    depositMonitorTimer
-  ) {
-
-    clearInterval(
-      depositMonitorTimer
-    );
-
-    depositMonitorTimer =
-      null;
-
-    console.log(
-      "🛑 Deposit monitor stopped."
-    );
-  }
-}
-
-// ============================================================
-// 38. WITHDRAWAL MONITOR STATE
-// ============================================================
-
-let withdrawalMonitorTimer =
-  null;
-
-// ============================================================
-// 39. START WITHDRAWAL MONITOR
-// ============================================================
-
-function startWithdrawalMonitor() {
-
-  if (
-    !withdrawal
-  ) {
-
-    console.warn(
-      "⚠️ Withdrawal service unavailable."
-    );
-
-    return false;
-  }
-
-  // ----------------------------------------------------------
-  // PREFERRED SERVICE MONITOR
-  // ----------------------------------------------------------
-
-  if (
-    typeof withdrawal.startMonitor ===
-    "function"
+    signal &&
+    typeof signal.startSignalPayoutProcessor ===
+      "function"
   ) {
 
     try {
 
-      withdrawal.startMonitor();
+      signal.startSignalPayoutProcessor();
 
       console.log(
-        "✅ Withdrawal monitor started."
+        "✅ Signal payout processor started."
       );
-
-      return true;
 
     } catch (error) {
 
       console.error(
-        "❌ Withdrawal monitor failed:",
+        "❌ Signal payout processor failed:",
         error.message
       );
-
-      return false;
     }
+
+  } else {
+
+    console.error(
+      "❌ Signal payout processor unavailable."
+    );
   }
 
   // ----------------------------------------------------------
-  // FALLBACK
+  // TELEGRAM RECHARGE APPROVAL
   // ----------------------------------------------------------
 
   if (
-    typeof withdrawal.monitorWithdrawals ===
-    "function"
+    telegramRecharge &&
+    typeof telegramRecharge.startTelegramRechargeBot ===
+      "function"
   ) {
 
-    console.warn(
-      "⚠️ withdrawal.startMonitor() unavailable; using fallback."
-    );
+    try {
 
-    let minutes =
-      Number(
-        process.env.WITHDRAWAL_MONITOR_MINUTES ||
-          1
-      );
-
-    if (
-      !Number.isFinite(
-        minutes
-      ) ||
-      minutes < 1
-    ) {
-
-      minutes =
-        1;
-    }
-
-    const run =
-      async () => {
-
-        try {
-
-          const result =
-            await withdrawal.monitorWithdrawals();
+      void telegramRecharge.startTelegramRechargeBot()
+        .then((result) => {
 
           console.log(
-            "💸 Withdrawal monitor:",
+            "📱 Telegram recharge bot:",
             result
           );
 
-        } catch (error) {
+        })
+        .catch((error) => {
 
           console.error(
-            "❌ Withdrawal monitor:",
+            "❌ Telegram recharge bot failed:",
             error.message
           );
-        }
-      };
 
-    run();
+        });
 
-    if (
-      withdrawalMonitorTimer
-    ) {
+    } catch (error) {
 
-      clearInterval(
-        withdrawalMonitorTimer
+      console.error(
+        "❌ Telegram recharge startup failed:",
+        error.message
       );
     }
 
-    withdrawalMonitorTimer =
-      setInterval(
-        run,
-        minutes *
-          60 *
-          1000
-      );
+  } else {
 
-    console.log(
-      `✅ Withdrawal monitor fallback started every ${minutes} minute(s).`
+    console.error(
+      "❌ Telegram recharge service unavailable."
     );
-
-    return true;
   }
 
-  console.warn(
-    "⚠️ Withdrawal monitoring functions are unavailable."
-  );
-
-  return false;
-}
-
-// ============================================================
-// 40. STOP WITHDRAWAL MONITOR
-// ============================================================
-
-function stopWithdrawalMonitor() {
+  // ----------------------------------------------------------
+  // TELEGRAM WITHDRAWAL APPROVAL
+  // ----------------------------------------------------------
 
   if (
-    withdrawalMonitorTimer
+    telegramWithdrawal &&
+    typeof telegramWithdrawal.startTelegramWithdrawalBot ===
+      "function"
   ) {
 
-    clearInterval(
-      withdrawalMonitorTimer
-    );
+    try {
 
-    withdrawalMonitorTimer =
-      null;
+      void telegramWithdrawal.startTelegramWithdrawalBot()
+        .then((result) => {
 
-    console.log(
-      "🛑 Withdrawal monitor fallback stopped."
+          console.log(
+            "📱 Telegram withdrawal bot:",
+            result
+          );
+
+        })
+        .catch((error) => {
+
+          console.error(
+            "❌ Telegram withdrawal bot failed:",
+            error.message
+          );
+
+        });
+
+    } catch (error) {
+
+      console.error(
+        "❌ Telegram withdrawal startup failed:",
+        error.message
+      );
+    }
+
+  } else {
+
+    console.error(
+      "❌ Telegram withdrawal service unavailable."
     );
   }
+
+  // ----------------------------------------------------------
+  // 9PM EAT SIGNAL SCHEDULER
+  // ----------------------------------------------------------
+
+  if (
+    scheduler &&
+    typeof scheduler.startScheduler ===
+      "function"
+  ) {
+
+    try {
+
+      scheduler.startScheduler();
+
+      console.log(
+        "✅ Signal scheduler started: Monday-Friday 9:00 PM EAT."
+      );
+
+    } catch (error) {
+
+      console.error(
+        "❌ Signal scheduler failed:",
+        error.message
+      );
+    }
+
+  } else {
+
+    console.error(
+      "❌ New signal scheduler unavailable."
+    );
+  }
+}
+
+function stopFinancialProcessors() {
+
+  // ----------------------------------------------------------
+  // SIGNAL PROCESSOR
+  // ----------------------------------------------------------
 
   try {
 
     if (
-      withdrawal &&
-      typeof withdrawal.stopMonitor ===
+      signal &&
+      typeof signal.stopSignalPayoutProcessor ===
         "function"
     ) {
 
-      withdrawal.stopMonitor();
+      signal.stopSignalPayoutProcessor();
 
       console.log(
-        "🛑 Withdrawal monitor stopped."
+        "🛑 Signal payout processor stopped."
       );
     }
 
   } catch (error) {
 
     console.warn(
-      "⚠️ Withdrawal monitor shutdown:",
+      "⚠️ Signal processor shutdown:",
+      error.message
+    );
+  }
+
+  // ----------------------------------------------------------
+  // SIGNAL SCHEDULER
+  // ----------------------------------------------------------
+
+  try {
+
+    if (
+      scheduler &&
+      typeof scheduler.stopScheduler ===
+        "function"
+    ) {
+
+      scheduler.stopScheduler();
+
+      console.log(
+        "🛑 Signal scheduler stopped."
+      );
+    }
+
+  } catch (error) {
+
+    console.warn(
+      "⚠️ Signal scheduler shutdown:",
+      error.message
+    );
+  }
+
+  // ----------------------------------------------------------
+  // TELEGRAM RECHARGE
+  // ----------------------------------------------------------
+
+  try {
+
+    if (
+      telegramRecharge &&
+      typeof telegramRecharge.stopTelegramRechargeBot ===
+        "function"
+    ) {
+
+      void telegramRecharge.stopTelegramRechargeBot();
+
+      console.log(
+        "🛑 Telegram recharge bot stopped."
+      );
+    }
+
+  } catch (error) {
+
+    console.warn(
+      "⚠️ Telegram recharge shutdown:",
+      error.message
+    );
+  }
+
+  // ----------------------------------------------------------
+  // TELEGRAM WITHDRAWAL
+  // ----------------------------------------------------------
+
+  try {
+
+    if (
+      telegramWithdrawal &&
+      typeof telegramWithdrawal.stopTelegramWithdrawalBot ===
+        "function"
+    ) {
+
+      void telegramWithdrawal.stopTelegramWithdrawalBot();
+
+      console.log(
+        "🛑 Telegram withdrawal bot stopped."
+      );
+    }
+
+  } catch (error) {
+
+    console.warn(
+      "⚠️ Telegram withdrawal shutdown:",
       error.message
     );
   }
@@ -3063,108 +3087,79 @@ const server =
       );
 
       // --------------------------------------------------------
-      // DEPOSIT CONFIG
+      // NEW FINANCIAL CONFIGURATION
       // --------------------------------------------------------
-
-      let depositConfig =
-        null;
 
       try {
 
-        if (
-          typeof deposit?.getConfig ===
-          "function"
-        ) {
+        const publicConfig =
+          typeof config?.getPublicConfig ===
+            "function"
+            ? config.getPublicConfig()
+            : null;
 
-          depositConfig =
-            deposit.getConfig();
-        }
+        console.log(
+          `💰 Signal reward: ${
+            publicConfig?.signals?.rewardUgx ??
+            20000
+          } UGX`
+        );
+
+        console.log(
+          `⏰ Signal schedule: ${
+            publicConfig?.signals?.time ??
+            "21:00"
+          } ${
+            publicConfig?.signals?.timezone ??
+            "Africa/Kampala"
+          }`
+        );
+
+        console.log(
+          `⏳ Signal processing: ${
+            publicConfig?.signals?.processingMinutes ??
+            7
+          } minute(s)`
+        );
+
+        console.log(
+          `📥 Mobile Money recharge: ${
+            publicConfig?.financial?.recharge?.enabled
+              ? "ENABLED"
+              : "DISABLED"
+          }`
+        );
+
+        console.log(
+          `💸 Mobile Money withdrawal: ${
+            publicConfig?.financial?.withdrawal?.enabled
+              ? "ENABLED"
+              : "DISABLED"
+          }`
+        );
+
+        console.log(
+          `💳 Withdrawal fee: ${
+            publicConfig?.financial?.withdrawal?.feePercent ??
+            5
+          }%`
+        );
 
       } catch (error) {
 
         console.warn(
-          "⚠️ Deposit config:",
+          "⚠️ Could not read public financial configuration:",
           error.message
         );
       }
 
-      console.log(
-        `📥 Minimum deposit: ${
-          depositConfig?.minimum ??
-          config?.DEPOSIT_MINIMUM ??
-          100
-        } USDT`
-      );
-
-      console.log(
-        `📥 Deposit service: ${
-          deposit
-            ? "READY"
-            : "UNAVAILABLE"
-        }`
-      );
-
       // --------------------------------------------------------
-      // WITHDRAWAL
+      // NEW FINANCIAL PROCESSORS
       // --------------------------------------------------------
 
-      console.log(
-        `💸 Withdrawal service: ${
-          withdrawal
-            ? "READY"
-            : "UNAVAILABLE"
-        }`
-      );
+      startFinancialProcessors();
 
-      console.log(
-        `💸 Withdrawal requestWithdrawal: ${
-          typeof withdrawal?.requestWithdrawal
-        }`
-      );
-
-      console.log(
-        `💸 Withdrawal startMonitor: ${
-          typeof withdrawal?.startMonitor
-        }`
-      );
-
-      console.log(
-        `💸 Withdrawal monitorWithdrawals: ${
-          typeof withdrawal?.monitorWithdrawals
-        }`
-      );
-
-      // --------------------------------------------------------
-      // SIGNALS
-      // --------------------------------------------------------
-
-      console.log(
-        "⏰ Signals: 7PM / 9PM / 11PM EAT"
-      );
-
-      console.log(
-        "============================================================"
-      );
-
-      // --------------------------------------------------------
-      // BYBIT WEBSOCKET
-      // --------------------------------------------------------
-
-      await startBybitWebSocket();
-
-      // --------------------------------------------------------
-      // DEPOSIT MONITOR
-      // --------------------------------------------------------
-
-      startDepositMonitor();
-
-      // --------------------------------------------------------
-      // WITHDRAWAL MONITOR
-      // --------------------------------------------------------
-
-      startWithdrawalMonitor();
-
-      // --------------------------------------------------------
+// --------------------------------------------------------
       // MARKET SYNC
       // --------------------------------------------------------
 
@@ -3198,38 +3193,23 @@ const server =
 
       }
 
-      // --------------------------------------------------------
-      // SIGNAL SCHEDULER
-      // --------------------------------------------------------
+      console.log(
+        `💸 Mobile Money withdrawal service: ${
+          withdrawal ? "READY" : "UNAVAILABLE"
+        }`
+      );
 
-      if (
-        firebaseManager &&
-        typeof firebaseManager.startSignalScheduler ===
-          "function"
-      ) {
+      console.log(
+        `📱 Telegram recharge approvals: ${
+          telegramRecharge ? "READY" : "UNAVAILABLE"
+        }`
+      );
 
-        try {
-
-          firebaseManager.startSignalScheduler();
-
-          console.log(
-            "✅ Signal scheduler started."
-          );
-
-        } catch (error) {
-
-          console.error(
-            "❌ Signal scheduler failed:",
-            error.message
-          );
-        }
-
-      } else {
-
-        console.error(
-          "❌ Signal scheduler unavailable because firebase_manager.js does not expose startSignalScheduler()."
-        );
-      }
+      console.log(
+        `📱 Telegram withdrawal approvals: ${
+          telegramWithdrawal ? "READY" : "UNAVAILABLE"
+        }`
+      );
 
       // --------------------------------------------------------
       // BACKEND READY
@@ -3320,33 +3300,17 @@ async function shutdown(
   );
 
   // ----------------------------------------------------------
-  // DEPOSIT
+  // NEW FINANCIAL PROCESSORS
   // ----------------------------------------------------------
 
   try {
 
-    stopDepositMonitor();
+    stopFinancialProcessors();
 
   } catch (error) {
 
     console.warn(
-      "⚠️ Deposit shutdown:",
-      error.message
-    );
-  }
-
-  // ----------------------------------------------------------
-  // WITHDRAWAL
-  // ----------------------------------------------------------
-
-  try {
-
-    stopWithdrawalMonitor();
-
-  } catch (error) {
-
-    console.warn(
-      "⚠️ Withdrawal shutdown:",
+      "⚠️ Financial processor shutdown:",
       error.message
     );
   }

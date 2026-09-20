@@ -1,274 +1,336 @@
+/**
+ * SAINT CRYPTO
+ * FILE: services/routes/signal.js
+ *
+ * FINAL DAILY SIGNAL API
+ *
+ * Routes:
+ *   GET  /api/signals/active
+ *   GET  /api/signals/status
+ *   GET  /api/signals/:code
+ *   POST /api/signals/redeem
+ *   GET  /api/signals/redemptions
+ *   GET  /api/signals/redemptions/:redemptionId
+ *
+ * User-side routes only.
+ * Signal generation and payout processing are server-side.
+ */
+
 "use strict";
 
 const express = require("express");
 
+const signal = require("../signal");
+
+/*
+ * IMPORTANT: Authentication is supplied by index.js through the
+ * existing routeDeps object. Do NOT require ../middleware/auth here.
+ * This keeps the financial route additive and compatible with the
+ * existing Saint Crypto authentication system.
+ */
 function createRouter({
   verifyAuth,
   verifyFirestore,
   strictLimiter,
-  services,
-}) {
+} = {}) {
   const router = express.Router();
 
-  const { signal } = services;
+  if (typeof verifyAuth !== "function") {
+    throw new Error("Signal routes require verifyAuth from routeDeps.");
+  }
 
-  // ============================================================
-  // GET ACTIVE SIGNALS
-  // ============================================================
+  if (typeof verifyFirestore !== "function") {
+    throw new Error("Signal routes require verifyFirestore from routeDeps.");
+  }
 
-  router.get(
-    "/api/signals/active",
-    verifyAuth,
-    verifyFirestore,
-    async (req, res) => {
-      try {
-        const result =
-          await signal.getActiveSignals(
-            req.uid
-          );
+/* ============================================================
+   HELPERS
+   ============================================================ */
 
-        return res
-          .status(result?.success === false ? 400 : 200)
-          .json(result);
-      } catch (error) {
-        console.error(
-          "❌ Get active signals error:",
-          error.message
-        );
+function asyncRoute(handler) {
+  return async (req, res) => {
+    try {
+      return await handler(req, res);
+    } catch (error) {
+      console.error(
+        "❌ Signal route error:",
+        error
+      );
 
-        return res.status(500).json({
-          success: false,
-          message:
-            error.message ||
-            "Unable to load active signals.",
-        });
-      }
+      const status =
+        Number.isInteger(
+          error?.statusCode
+        )
+          ? error.statusCode
+          : 400;
+
+      return res.status(status).json({
+        success: false,
+        message:
+          error?.message ||
+          "Unable to process signal request.",
+      });
     }
+  };
+}
+
+function getUserId(req) {
+  return (
+    req.uid ||
+    req.user?.uid ||
+    req.auth?.uid ||
+    null
   );
+}
 
-  // ============================================================
-  // GET SIGNALS
-  // ============================================================
+function requireUserId(req, res) {
+  const uid =
+    getUserId(req);
 
-  router.get(
-    "/api/signals",
-    verifyAuth,
-    verifyFirestore,
-    async (req, res) => {
-      try {
-        const result =
-          await signal.getActiveSignals(
-            req.uid
-          );
+  if (!uid) {
+    res.status(401).json({
+      success: false,
+      message:
+        "Authentication required.",
+    });
 
-        return res
-          .status(result?.success === false ? 400 : 200)
-          .json(result);
-      } catch (error) {
-        console.error(
-          "❌ Get signals error:",
-          error.message
-        );
+    return null;
+  }
 
-        return res.status(500).json({
-          success: false,
-          message:
-            error.message ||
-            "Unable to load signals.",
-        });
-      }
+  return uid;
+}
+
+function parseLimit(
+  value,
+  fallback = 50
+) {
+  const parsed =
+    Number.parseInt(
+      value,
+      10
+    );
+
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(
+    Math.max(parsed, 1),
+    100
+  );
+}
+
+/* ============================================================
+   GET ACTIVE SIGNAL
+ *
+ * GET /api/signals/active
+ * ============================================================ */
+
+router.get(
+  "/active",
+  verifyAuth,
+  verifyFirestore,
+  asyncRoute(async (req, res) => {
+    const result =
+      await signal.getActiveSignal();
+
+    return res.json(result);
+  })
+);
+
+/* ============================================================
+   GET SIGNAL SERVICE STATUS
+ *
+ * GET /api/signals/status
+ *
+ * Does not expose internal database information.
+ * ============================================================ */
+
+router.get(
+  "/status",
+  verifyAuth,
+  verifyFirestore,
+  asyncRoute(async (req, res) => {
+    const result =
+      await signal.getStatus();
+
+    return res.json(result);
+  })
+);
+
+/* ============================================================
+   POST REDEEM SIGNAL
+ *
+ * POST /api/signals/redeem
+ *
+ * Body:
+ * {
+ *   "code": "XXXXXXXXXXXX"
+ * }
+ *
+ * The response is PROCESSING.
+ * No balance is credited here.
+ * ============================================================ */
+
+const redeemHandler =
+  asyncRoute(async (req, res) => {
+    const uid =
+      requireUserId(req, res);
+
+    if (!uid) {
+      return;
     }
-  );
 
-  // ============================================================
-  // SIGNAL STATUS
-  // ============================================================
+    const body =
+      req.body || {};
 
-  router.get(
-    "/api/signals/status/:code",
-    verifyAuth,
-    verifyFirestore,
-    async (req, res) => {
-      try {
-        const result =
-          await signal.getSignalStatus(
-            req.params.code
-          );
-
-        return res
-          .status(result?.success === false ? 400 : 200)
-          .json(result);
-      } catch (error) {
-        console.error(
-          "❌ Signal status error:",
-          error.message
-        );
-
-        return res.status(400).json({
-          success: false,
-          message:
-            error.message ||
-            "Unable to check signal.",
-        });
-      }
-    }
-  );
-
-  // ============================================================
-  // REDEEM SIGNAL
-  //
-  // IMPORTANT:
-  //
-  // Firebase UID comes from verifyAuth:
-  //
-  //     req.uid
-  //
-  // Flutter only sends the signal code.
-  //
-  // Expected body:
-  //
-  // {
-  //   "code": "8FQ2M7KX91ZT"
-  // }
-  //
-  // The service expects:
-  //
-  //     redeemSignal(userId, body)
-  //
-  // Therefore we MUST call:
-  //
-  //     redeemSignal(req.uid, req.body)
-  //
-  // NOT:
-  //
-  //     redeemSignal({ uid: req.uid, code })
-  //
-  // ============================================================
-
-  router.post(
-    "/api/signals/redeem",
-
-    verifyAuth,
-
-    strictLimiter,
-
-    verifyFirestore,
-
-    async (req, res) => {
-      try {
-        // --------------------------------------------------------
-        // Validate request body
-        // --------------------------------------------------------
-
-        const body =
-          req.body &&
-          typeof req.body === "object"
-            ? req.body
-            : {};
-
-        const code =
-          typeof body.code === "string"
-            ? body.code.trim()
-            : typeof body.signalCode === "string"
-              ? body.signalCode.trim()
-              : typeof body.signal_code === "string"
-                ? body.signal_code.trim()
-                : "";
-
-        if (!code) {
-          return res.status(400).json({
-            success: false,
-            status: "INVALID_CODE",
-            message:
-              "Signal code is required.",
-          });
+    const result =
+      await signal.redeemSignal(
+        uid,
+        {
+          code:
+            body.code ??
+            body.signalCode ??
+            body.signal_code,
         }
+      );
 
-        // --------------------------------------------------------
-        // IMPORTANT FIX
-        //
-        // redeemSignal(userId, body)
-        // --------------------------------------------------------
+    return res.json(result);
+  });
 
-        const result =
-          await signal.redeemSignal(
-            req.uid,
-            {
-              code,
-            }
-          );
-
-        // --------------------------------------------------------
-        // Return service result
-        // --------------------------------------------------------
-
-        return res
-          .status(
-            result?.success === false
-              ? 400
-              : 200
-          )
-          .json(result);
-
-      } catch (error) {
-        console.error(
-          `❌ Signal redemption error for ${req.uid || "unknown user"}:`,
-          error
-        );
-
-        return res.status(
-          error.statusCode || 400
-        ).json({
-          success: false,
-          status:
-            error.code ||
-            "REDEMPTION_FAILED",
-          message:
-            error.message ||
-            "Unable to redeem signal.",
-        });
-      }
-    }
-  );
-
-  // ============================================================
-  // SIGNAL REDEMPTION HISTORY
-  // ============================================================
-
-  router.get(
-    "/api/signals/redemptions",
+if (strictLimiter) {
+  router.post(
+    "/redeem",
     verifyAuth,
     verifyFirestore,
-    async (req, res) => {
-      try {
-        const result =
-          await signal.getUserRedemptions(
-            req.uid,
-            req.query.limit
-          );
-
-        return res
-          .status(result?.success === false ? 400 : 200)
-          .json(result);
-      } catch (error) {
-        console.error(
-          "❌ Signal redemption history error:",
-          error.message
-        );
-
-        return res.status(500).json({
-          success: false,
-          message:
-            error.message ||
-            "Unable to load redemption history.",
-        });
-      }
-    }
+    strictLimiter,
+    redeemHandler
   );
+} else {
+  router.post(
+    "/redeem",
+    verifyAuth,
+    verifyFirestore,
+    redeemHandler
+  );
+}
+
+/* ============================================================
+   GET USER REDEMPTION HISTORY
+ *
+ * GET /api/signals/redemptions
+ * ============================================================ */
+
+router.get(
+  "/redemptions",
+  verifyAuth,
+  verifyFirestore,
+  asyncRoute(async (req, res) => {
+    const uid =
+      requireUserId(req, res);
+
+    if (!uid) {
+      return;
+    }
+
+    const limit =
+      parseLimit(
+        req.query.limit,
+        50
+      );
+
+    const result =
+      await signal.getRedemptionHistory(
+        uid,
+        limit
+      );
+
+    return res.json(result);
+  })
+);
+
+/* ============================================================
+   GET ONE REDEMPTION
+ *
+ * GET /api/signals/redemptions/:redemptionId
+ * ============================================================ */
+
+router.get(
+  "/redemptions/:redemptionId",
+  verifyAuth,
+  verifyFirestore,
+  asyncRoute(async (req, res) => {
+    const uid =
+      requireUserId(req, res);
+
+    if (!uid) {
+      return;
+    }
+
+    const redemptionId =
+      String(
+        req.params.redemptionId ||
+          ""
+      ).trim();
+
+    if (!redemptionId) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Redemption ID is required.",
+      });
+    }
+
+    const result =
+      await signal.getRedemption(
+        uid,
+        redemptionId
+      );
+
+    return res.json(result);
+  })
+);
+
+/* ============================================================
+   GET SIGNAL BY CODE
+ *
+ * This route is deliberately placed AFTER the named routes
+ * above so:
+ *
+ *   /redemptions
+ *   /redemptions/:id
+ *   /active
+ *   /status
+ *
+ * are not interpreted as signal codes.
+ *
+ * GET /api/signals/:code
+ * ============================================================ */
+
+router.get(
+  "/:code",
+  verifyAuth,
+  verifyFirestore,
+  asyncRoute(async (req, res) => {
+    const code =
+      String(
+        req.params.code || ""
+      ).trim();
+
+    const result =
+      await signal.getSignal(
+        code
+      );
+
+    return res.json(result);
+  })
+);
+
+/* ============================================================
+   EXPORT
+ * ============================================================ */
 
   return router;
 }
 
-module.exports = {
-  createRouter,
-};
+module.exports = { createRouter };

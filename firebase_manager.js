@@ -1,45 +1,22 @@
 // ============================================================
-// SAINT CRYPTO TRADE ENGINE
+// SAINT CRYPTO
 // firebase_manager.js
+// ============================================================
+// Firebase compatibility/utility manager.
 //
-// FIREBASE + SIGNAL MANAGER
-//
-// RESPONSIBILITIES:
-// - Initialize/reuse Firebase Admin
-// - Firestore connection
-// - Realtime Database connection
-// - Generate signal codes
-// - Create scheduled signals
-// - Save signals to Firestore
-// - Push signals to Firebase RTDB
-// - Maintain live_signal for Flutter Home/Trade
-// - Maintain latest_signal for Flutter compatibility
-// - Send signal to Telegram
-// - Send backend ONLINE alert to Telegram
-// - Expire live signals
-// - User balance synchronization
-// - Account freeze checks
-// - Withdrawal freeze checks
-//
-// DOES NOT:
-// - Trade on MT5
-// - Connect to MT5
-// - Execute trades
-// - Generate trading indicators
-// - Redeem signal codes
-//
-// SIGNAL REDEMPTION:
-// services/signal.js
-//
-// MT5 TRADING:
-// Manual
+// IMPORTANT:
+// - Signal creation/release is now owned by services/signal.js.
+// - Daily scheduling is now owned by services/scheduler.js.
+// - Signal redemption/payout is owned by services/signal.js.
+// - Financial ledger/recharge/withdrawal logic is owned by their
+//   respective services.
+// - This file keeps Firebase, RTDB compatibility, Telegram alerts,
+//   freeze checks, and legacy balance helpers that other backend
+//   modules may still use.
+// - No Bybit/TRON/USDT withdrawal flow is implemented here.
 // ============================================================
 
 "use strict";
-
-// ============================================================
-// 0. DEPENDENCIES
-// ============================================================
 
 const crypto = require("crypto");
 
@@ -66,43 +43,36 @@ const {
 // ============================================================
 
 const FIREBASE_DATABASE_URL =
-  String(
-    process.env.FIREBASE_DATABASE_URL || ""
-  ).trim();
+  String(process.env.FIREBASE_DATABASE_URL || "").trim();
 
 const TELEGRAM_BOT_TOKEN =
-  String(
-    process.env.TELEGRAM_BOT_TOKEN || ""
-  ).trim();
+  String(process.env.TELEGRAM_BOT_TOKEN || "").trim();
 
 const TELEGRAM_CHAT_ID =
-  String(
-    process.env.TELEGRAM_CHAT_ID || ""
-  ).trim();
-
-const SIGNAL_PROFIT =
-  Number(
-    process.env.SIGNAL_PROFIT || "2.00"
-  );
-
-const SIGNAL_EXPIRY_MINUTES =
-  Number(
-    process.env.SIGNAL_EXPIRY_MINUTES || "20"
-  );
+  String(process.env.TELEGRAM_CHAT_ID || "").trim();
 
 const SIGNAL_TIMEZONE =
-  String(
-    process.env.SIGNAL_TIMEZONE ||
-      "Africa/Kampala"
-  ).trim();
+  String(process.env.SIGNAL_TIMEZONE || "Africa/Kampala").trim();
 
 const SIGNAL_DEFAULT_SYMBOL =
-  String(
-    process.env.SIGNAL_DEFAULT_SYMBOL ||
-      "XAUUSD"
-  )
+  String(process.env.SIGNAL_DEFAULT_SYMBOL || "XAUUSD")
     .trim()
     .toUpperCase();
+
+// New system values. These are informational here; actual signal
+// reward/processing/scheduling logic lives in services/signal.js
+// and services/scheduler.js.
+const SIGNAL_REWARD_UGX = Number(
+  process.env.SIGNAL_REWARD_UGX || "20000"
+);
+
+const SIGNAL_PROCESSING_MINUTES = Number(
+  process.env.SIGNAL_PROCESSING_MINUTES || "7"
+);
+
+const SIGNAL_EXPIRY_MINUTES = Number(
+  process.env.SIGNAL_EXPIRY_MINUTES || "1440"
+);
 
 // ============================================================
 // 2. FIREBASE REFERENCES
@@ -118,30 +88,20 @@ let realtimeDb = null;
 
 function initializeFirebase() {
   try {
-    // --------------------------------------------------------
-    // REUSE FIREBASE INITIALIZED BY index.js
-    // --------------------------------------------------------
-
+    // Reuse Firebase initialized by index.js or another service.
     if (getApps().length > 0) {
       firebaseApp = getApp();
 
-      firestoreDb =
-        getFirebaseFirestore(
-          firebaseApp
-        );
+      firestoreDb = getFirebaseFirestore(firebaseApp);
 
       if (FIREBASE_DATABASE_URL) {
         try {
-          realtimeDb =
-            getFirebaseDatabase(
-              firebaseApp
-            );
+          realtimeDb = getFirebaseDatabase(firebaseApp);
         } catch (error) {
           console.warn(
             "⚠️ Firebase RTDB unavailable:",
             error.message
           );
-
           realtimeDb = null;
         }
       }
@@ -149,17 +109,9 @@ function initializeFirebase() {
       console.log(
         "🔥 firebase_manager.js reused existing Firebase Admin app."
       );
-
+      console.log("🟢 Firestore connected.");
       console.log(
-        "🟢 Firestore connected."
-      );
-
-      console.log(
-        `🟢 RTDB: ${
-          realtimeDb
-            ? "READY"
-            : "UNAVAILABLE"
-        }`
+        `🟢 RTDB: ${realtimeDb ? "READY" : "UNAVAILABLE"}`
       );
 
       return {
@@ -169,27 +121,16 @@ function initializeFirebase() {
       };
     }
 
-    // --------------------------------------------------------
-    // SAFETY FALLBACK
-    // --------------------------------------------------------
-
     let credential = null;
 
-    const json =
-      String(
-        process.env.FIREBASE_SERVICE_ACCOUNT_JSON ||
-          ""
-      ).trim();
+    const json = String(
+      process.env.FIREBASE_SERVICE_ACCOUNT_JSON || ""
+    ).trim();
 
     if (json) {
       try {
-        const serviceAccount =
-          JSON.parse(json);
-
-        credential =
-          cert(
-            serviceAccount
-          );
+        const serviceAccount = JSON.parse(json);
+        credential = cert(serviceAccount);
 
         console.log(
           "✅ Firebase manager using FIREBASE_SERVICE_ACCOUNT_JSON."
@@ -199,88 +140,43 @@ function initializeFirebase() {
           `Invalid FIREBASE_SERVICE_ACCOUNT_JSON: ${error.message}`
         );
       }
-    }
-
-    // --------------------------------------------------------
-    // INDIVIDUAL ENVIRONMENT VARIABLES
-    // --------------------------------------------------------
-
-    else if (
+    } else if (
       process.env.FIREBASE_PROJECT_ID &&
       process.env.FIREBASE_CLIENT_EMAIL &&
       process.env.FIREBASE_PRIVATE_KEY
     ) {
-      credential =
-        cert({
-          projectId:
-            process.env.FIREBASE_PROJECT_ID,
-
-          clientEmail:
-            process.env.FIREBASE_CLIENT_EMAIL,
-
-          privateKey:
-            String(
-              process.env.FIREBASE_PRIVATE_KEY
-            ).replace(
-              /\\n/g,
-              "\n"
-            ),
-        });
+      credential = cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: String(
+          process.env.FIREBASE_PRIVATE_KEY
+        ).replace(/\\n/g, "\n"),
+      });
 
       console.log(
         "✅ Firebase manager using individual environment variables."
       );
-    }
-
-    // --------------------------------------------------------
-    // GOOGLE APPLICATION DEFAULT
-    // --------------------------------------------------------
-
-    else if (
-      process.env.GOOGLE_APPLICATION_CREDENTIALS
-    ) {
-      credential =
-        applicationDefault();
+    } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+      credential = applicationDefault();
 
       console.log(
         "✅ Firebase manager using application default credentials."
       );
-    }
+    } else {
+      const fs = require("fs");
+      const path = require("path");
 
-    // --------------------------------------------------------
-    // LOCAL SERVICE ACCOUNT
-    // --------------------------------------------------------
+      const serviceAccountPath = path.join(
+        __dirname,
+        "serviceAccountKey.json"
+      );
 
-    else {
-      const fs =
-        require("fs");
-
-      const path =
-        require("path");
-
-      const serviceAccountPath =
-        path.join(
-          __dirname,
-          "serviceAccountKey.json"
+      if (fs.existsSync(serviceAccountPath)) {
+        const serviceAccount = JSON.parse(
+          fs.readFileSync(serviceAccountPath, "utf8")
         );
 
-      if (
-        fs.existsSync(
-          serviceAccountPath
-        )
-      ) {
-        const serviceAccount =
-          JSON.parse(
-            fs.readFileSync(
-              serviceAccountPath,
-              "utf8"
-            )
-          );
-
-        credential =
-          cert(
-            serviceAccount
-          );
+        credential = cert(serviceAccount);
 
         console.log(
           "✅ Firebase manager using serviceAccountKey.json."
@@ -288,59 +184,28 @@ function initializeFirebase() {
       }
     }
 
-    // --------------------------------------------------------
-    // NO CREDENTIAL
-    // --------------------------------------------------------
-
     if (!credential) {
-      throw new Error(
-        "Firebase credentials were not found."
-      );
+      throw new Error("Firebase credentials were not found.");
     }
 
-    // --------------------------------------------------------
-    // FIREBASE OPTIONS
-    // --------------------------------------------------------
+    const options = { credential };
 
-    const options = {
-      credential,
-    };
-
-    if (
-      FIREBASE_DATABASE_URL
-    ) {
-      options.databaseURL =
-        FIREBASE_DATABASE_URL;
+    if (FIREBASE_DATABASE_URL) {
+      options.databaseURL = FIREBASE_DATABASE_URL;
     }
 
-    // --------------------------------------------------------
-    // INITIALIZE
-    // --------------------------------------------------------
+    firebaseApp = initializeApp(options);
 
-    firebaseApp =
-      initializeApp(
-        options
-      );
+    firestoreDb = getFirebaseFirestore(firebaseApp);
 
-    firestoreDb =
-      getFirebaseFirestore(
-        firebaseApp
-      );
-
-    if (
-      FIREBASE_DATABASE_URL
-    ) {
+    if (FIREBASE_DATABASE_URL) {
       try {
-        realtimeDb =
-          getFirebaseDatabase(
-            firebaseApp
-          );
+        realtimeDb = getFirebaseDatabase(firebaseApp);
       } catch (error) {
         console.warn(
           "⚠️ Firebase RTDB unavailable:",
           error.message
         );
-
         realtimeDb = null;
       }
     }
@@ -348,17 +213,9 @@ function initializeFirebase() {
     console.log(
       "🔥 Firebase Admin initialized by firebase_manager.js."
     );
-
+    console.log("🟢 Firestore connected.");
     console.log(
-      "🟢 Firestore connected."
-    );
-
-    console.log(
-      `🟢 RTDB: ${
-        realtimeDb
-          ? "READY"
-          : "UNAVAILABLE"
-      }`
+      `🟢 RTDB: ${realtimeDb ? "READY" : "UNAVAILABLE"}`
     );
 
     return {
@@ -371,31 +228,18 @@ function initializeFirebase() {
       "❌ Firebase initialization failed:",
       error.message
     );
-
     throw error;
   }
 }
 
 // ============================================================
-// 4. INITIALIZE IMMEDIATELY
+// 4. INITIALIZE
 // ============================================================
 
 initializeFirebase();
 
 // ============================================================
-// 5. FIRESTORE GETTER
-// ============================================================
-//
-// IMPORTANT:
-// The imported Firebase function is named:
-//
-//     getFirebaseFirestore
-//
-// The backend-compatible exported function remains:
-//
-//     getFirestore
-//
-// This prevents the duplicate identifier error.
+// 5. FIRESTORE / RTDB GETTERS
 // ============================================================
 
 function getFirestoreDb() {
@@ -404,23 +248,14 @@ function getFirestoreDb() {
   }
 
   if (!firestoreDb) {
-    throw new Error(
-      "Firestore is unavailable."
-    );
+    throw new Error("Firestore is unavailable.");
   }
 
   return firestoreDb;
 }
 
-// ============================================================
-// 6. RTDB GETTER
-// ============================================================
-
 function getRealtimeDatabase() {
-  if (
-    !realtimeDb &&
-    FIREBASE_DATABASE_URL
-  ) {
+  if (!realtimeDb && FIREBASE_DATABASE_URL) {
     initializeFirebase();
   }
 
@@ -428,62 +263,40 @@ function getRealtimeDatabase() {
 }
 
 // ============================================================
-// 7. USER ID VALIDATION
+// 6. USER ID VALIDATION
 // ============================================================
 
-function validateUserId(
-  userId
-) {
-  if (
-    !userId ||
-    typeof userId !== "string"
-  ) {
+function validateUserId(userId) {
+  if (!userId || typeof userId !== "string") {
     return false;
   }
 
-  const clean =
-    userId.trim();
+  const clean = userId.trim();
 
   if (!clean) {
     return false;
   }
 
-  return /^[a-zA-Z0-9_-]{3,128}$/.test(
-    clean
-  );
+  return /^[a-zA-Z0-9_-]{3,128}$/.test(clean);
 }
 
 // ============================================================
-// 8. SIGNAL CODE NORMALIZATION
+// 7. SIGNAL CODE HELPERS
 // ============================================================
 
-function normalizeSignalCode(
-  code
-) {
-  if (
-    !code ||
-    typeof code !== "string"
-  ) {
+function normalizeSignalCode(code) {
+  if (!code || typeof code !== "string") {
     return "";
   }
 
-  const normalized =
-    code.trim().toUpperCase();
+  const normalized = code.trim().toUpperCase();
 
-  if (
-    !/^[A-Z0-9]{12}$/.test(
-      normalized
-    )
-  ) {
+  if (!/^[A-Z0-9]{12}$/.test(normalized)) {
     return "";
   }
 
   return normalized;
 }
-
-// ============================================================
-// 9. SIGNAL CODE GENERATOR
-// ============================================================
 
 function generateSignalCode() {
   const characters =
@@ -491,140 +304,58 @@ function generateSignalCode() {
 
   let code = "";
 
-  for (
-    let i = 0;
-    i < 12;
-    i++
-  ) {
-    code +=
-      characters[
-        crypto.randomInt(
-          0,
-          characters.length
-        )
-      ];
+  for (let i = 0; i < 12; i++) {
+    code += characters[
+      crypto.randomInt(0, characters.length)
+    ];
   }
 
   return code;
 }
 
 // ============================================================
-// 10. KAMPALA TIME
+// 8. KAMPALA TIME
 // ============================================================
 
 function getKampalaTimeParts() {
-  const now =
-    new Date();
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    timeZone: SIGNAL_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
 
-  const formatter =
-    new Intl.DateTimeFormat(
-      "en-GB",
-      {
-        timeZone:
-          SIGNAL_TIMEZONE,
-
-        year:
-          "numeric",
-
-        month:
-          "2-digit",
-
-        day:
-          "2-digit",
-
-        hour:
-          "2-digit",
-
-        minute:
-          "2-digit",
-
-        second:
-          "2-digit",
-
-        hourCycle:
-          "h23",
-      }
-    );
-
-  const parts =
-    formatter.formatToParts(
-      now
-    );
-
+  const parts = formatter.formatToParts(new Date());
   const values = {};
 
-  for (
-    const part of parts
-  ) {
-    if (
-      part.type !==
-      "literal"
-    ) {
-      values[
-        part.type
-      ] =
-        part.value;
+  for (const part of parts) {
+    if (part.type !== "literal") {
+      values[part.type] = part.value;
     }
   }
 
   return {
-    date:
-      `${values.year}-${values.month}-${values.day}`,
-
-    time:
-      `${values.hour}:${values.minute}`,
-
-    hour:
-      Number(
-        values.hour
-      ),
-
-    minute:
-      Number(
-        values.minute
-      ),
-
-    second:
-      Number(
-        values.second
-      ),
+    date: `${values.year}-${values.month}-${values.day}`,
+    time: `${values.hour}:${values.minute}`,
+    hour: Number(values.hour),
+    minute: Number(values.minute),
+    second: Number(values.second),
   };
 }
 
 // ============================================================
-// 11. SCHEDULED SESSIONS
+// 9. TELEGRAM
 // ============================================================
 
-const scheduledSessions = {
-  "19:00":
-    "7:00 PM EAT",
-
-  "21:00":
-    "9:00 PM EAT",
-
-  "23:00":
-    "11:00 PM EAT",
-};
-
-// ============================================================
-// 12. TELEGRAM
-// ============================================================
-
-async function sendTelegramAlert(
-  message
-) {
-  if (
-    !TELEGRAM_BOT_TOKEN ||
-    !TELEGRAM_CHAT_ID
-  ) {
+async function sendTelegramAlert(message) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     console.error(
       "❌ Telegram credentials are missing."
     );
-
-    console.error(
-      "⚠️ Required: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID."
-    );
-
     return false;
   }
 
@@ -632,50 +363,27 @@ async function sendTelegramAlert(
     `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
 
   try {
-    const response =
-      await fetch(
-        url,
-        {
-          method:
-            "POST",
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text: String(message),
+        parse_mode: "Markdown",
+      }),
+    });
 
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
+    const data = await response.json();
 
-          body:
-            JSON.stringify({
-              chat_id:
-                TELEGRAM_CHAT_ID,
-
-              text:
-                message,
-
-              parse_mode:
-                "Markdown",
-            }),
-        }
-      );
-
-    const data =
-      await response.json();
-
-    if (
-      response.ok &&
-      data.ok === true
-    ) {
-      console.log(
-        "📱 Telegram message sent successfully."
-      );
-
+    if (response.ok && data.ok === true) {
       return true;
     }
 
     console.error(
       "❌ Telegram API error:",
-      data.description ||
-        "Unknown Telegram error"
+      data.description || "Unknown Telegram error"
     );
 
     return false;
@@ -689,35 +397,17 @@ async function sendTelegramAlert(
   }
 }
 
-// ============================================================
-// 13. BACKEND ONLINE ALERT
-// ============================================================
-
 async function sendBackendOnlineAlert() {
-  const message =
-    "🟢 *SAINT CRYPTO BACKEND IS ONLINE* ✝️⚡";
-
-  const sent =
-    await sendTelegramAlert(
-      message
-    );
-
-  if (sent) {
-    console.log(
-      "🟢 Backend ONLINE alert sent to Telegram."
-    );
-  } else {
-    console.error(
-      "❌ Backend ONLINE alert could not be sent to Telegram."
-    );
-  }
-
-  return sent;
+  return sendTelegramAlert(
+    "🟢 *SAINT CRYPTO BACKEND IS ONLINE* ✝️⚡"
+  );
 }
 
 // ============================================================
-// 13A. TELEGRAM SIGNAL SEND CLAIM
+// 10. TELEGRAM SIGNAL SEND CLAIM
 // ============================================================
+// Kept for compatibility with older signal-release callers.
+// New scheduled signal creation is owned by services/signal.js.
 
 async function sendSignalTelegramOnce(signalCode, message) {
   const db = getFirestoreDb();
@@ -728,1023 +418,168 @@ async function sendSignalTelegramOnce(signalCode, message) {
   }
 
   const ref = db.collection("signals").doc(cleanCode);
+  const CLAIM_TIMEOUT_MS = 120000;
 
-  const claimed = await db.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(ref);
+  const claimed = await db.runTransaction(
+    async (transaction) => {
+      const snapshot = await transaction.get(ref);
 
-    if (!snapshot.exists) {
-      return false;
-    }
-
-    const data = snapshot.data() || {};
-
-    if (data.telegramClaimed === true || data.telegramSent === true) {
-      return false;
-    }
-
-    transaction.update(ref, {
-      telegramClaimed: true,
-      telegramClaimedAt: FieldValue.serverTimestamp(),
-    });
-
-    return true;
-  });
-
-  if (!claimed) {
-    return false;
-  }
-
-  const sent = await sendTelegramAlert(message);
-
-  if (sent) {
-    await ref.set({
-      telegramSent: true,
-      telegramSentAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
-  } else {
-    await ref.set({
-      telegramSendFailed: true,
-      telegramSendFailedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
-  }
-
-  return sent;
-}
-
-// ============================================================
-// 14. TELEGRAM SIGNAL MESSAGE
-// ============================================================
-
-function buildTelegramMessage(
-  code,
-  session,
-  profit,
-  symbol
-) {
-  return (
-    `🎟️ *NEW TRADE SIGNAL RELEASED*\n\n` +
-
-    `🔹 *Session:* \`${session}\`\n` +
-
-    `🔹 *Asset:* \`${symbol}\`\n` +
-
-    `💵 *Verified Profit:* \`+$${profit.toFixed(
-      2
-    )} USDT\`\n` +
-
-    `🔑 *Claim Code:* \`${code}\`\n\n` +
-
-    `⏰ *Expires in:* ${SIGNAL_EXPIRY_MINUTES} minutes\n\n` +
-
-    `⚡ *Redeem this code in the Saint Crypto app.*`
-  );
-}
-
-// ============================================================
-// 15. CREATE AND RELEASE SIGNAL
-// ============================================================
-
-async function createAndReleaseSignal(
-  sessionLabel = "MANUAL"
-) {
-  const db =
-    getFirestoreDb();
-
-  const rtdb =
-    getRealtimeDatabase();
-
-  const profit =
-    Number(
-      SIGNAL_PROFIT
-    );
-
-  if (
-    !Number.isFinite(
-      profit
-    ) ||
-    profit <= 0
-  ) {
-    throw new Error(
-      "SIGNAL_PROFIT must be greater than zero."
-    );
-  }
-
-  const expiryMinutes =
-    Number(
-      SIGNAL_EXPIRY_MINUTES
-    );
-
-  if (
-    !Number.isFinite(
-      expiryMinutes
-    ) ||
-    expiryMinutes <= 0
-  ) {
-    throw new Error(
-      "SIGNAL_EXPIRY_MINUTES must be greater than zero."
-    );
-  }
-
-  let code = "";
-
-  for (
-    let attempt = 0;
-    attempt < 20;
-    attempt++
-  ) {
-    const candidate =
-      generateSignalCode();
-
-    const existing =
-      await db
-        .collection(
-          "signals"
-        )
-        .doc(
-          candidate
-        )
-        .get();
-
-    if (
-      !existing.exists
-    ) {
-      code =
-        candidate;
-
-      break;
-    }
-  }
-
-  if (!code) {
-    throw new Error(
-      "Unable to generate a unique signal code."
-    );
-  }
-
-  const now =
-    new Date();
-
-  const expiresAt =
-    new Date(
-      now.getTime() +
-        expiryMinutes *
-          60 *
-          1000
-    );
-
-  const createdTimestamp =
-    Timestamp.fromDate(
-      now
-    );
-
-  const expiresTimestamp =
-    Timestamp.fromDate(
-      expiresAt
-    );
-
-  const signalData = {
-    code,
-
-    profit,
-
-    symbol:
-      SIGNAL_DEFAULT_SYMBOL,
-
-    session:
-      sessionLabel,
-
-    status:
-      "PROFIT_VERIFIED",
-
-    active:
-      true,
-
-    isRedeemed:
-      false,
-
-    created_at:
-      createdTimestamp,
-
-    expires_at:
-      expiresTimestamp,
-
-    createdAt:
-      createdTimestamp,
-
-    expiresAt:
-      expiresTimestamp,
-  };
-
-  console.log("");
-
-  console.log(
-    "============================================================"
-  );
-
-  console.log(
-    "🎟️ SAINT CRYPTO SIGNAL RELEASE"
-  );
-
-  console.log(
-    "============================================================"
-  );
-
-  console.log(
-    `⏰ Session: ${sessionLabel}`
-  );
-
-  console.log(
-    `🎟️ Code: ${code}`
-  );
-
-  console.log(
-    `💰 Profit: $${profit.toFixed(
-      2
-    )} USDT`
-  );
-
-  console.log(
-    `📊 Symbol: ${SIGNAL_DEFAULT_SYMBOL}`
-  );
-
-  console.log(
-    `⏳ Expires: ${expiresAt.toISOString()}`
-  );
-
-  console.log(
-    "============================================================"
-  );
-
-  await db
-    .collection(
-      "signals"
-    )
-    .doc(
-      code
-    )
-    .set(
-      signalData
-    );
-
-  console.log(
-    `✅ Signal ${code} saved to Firestore.`
-  );
-
-  let liveSignalWritten =
-    false;
-
-  if (rtdb) {
-    const liveSignal = {
-      code,
-
-      profit,
-
-      symbol:
-        SIGNAL_DEFAULT_SYMBOL,
-
-      session:
-        sessionLabel,
-
-      status:
-        "PROFIT_VERIFIED",
-
-      active:
-        true,
-
-      created_at:
-        now.toISOString(),
-
-      expires_at:
-        expiresAt.toISOString(),
-
-      timestamp:
-        Date.now(),
-    };
-
-    try {
-      await rtdb
-        .ref(
-          `signals/${code}`
-        )
-        .set(
-          liveSignal
-        );
-
-      await rtdb
-        .ref(
-          "live_signal"
-        )
-        .set(
-          liveSignal
-        );
-
-      await rtdb
-        .ref(
-          "latest_signal"
-        )
-        .set(
-          liveSignal
-        );
-
-      liveSignalWritten =
-        true;
-
-      console.log(
-        `🟢 Signal ${code} pushed live to Firebase RTDB.`
-      );
-    } catch (error) {
-      console.error(
-        "❌ RTDB signal write failed:",
-        error.message
-      );
-    }
-  } else {
-    console.error(
-      "❌ RTDB unavailable."
-    );
-  }
-
-  const telegramMessage =
-    buildTelegramMessage(
-      code,
-      sessionLabel,
-      profit,
-      SIGNAL_DEFAULT_SYMBOL
-    );
-
-  const telegramSent =
-    await sendSignalTelegramOnce(
-      code,
-      telegramMessage
-    );
-
-  console.log(
-    `📱 Telegram delivery: ${
-      telegramSent
-        ? "SUCCESS"
-        : "FAILED"
-    }`
-  );
-
-  return {
-    success:
-      true,
-
-    code,
-
-    profit,
-
-    symbol:
-      SIGNAL_DEFAULT_SYMBOL,
-
-    session:
-      sessionLabel,
-
-    createdAt:
-      now.toISOString(),
-
-    expiresAt:
-      expiresAt.toISOString(),
-
-    telegramSent,
-
-    live:
-      liveSignalWritten,
-  };
-}
-
-// ============================================================
-// 16. EXPIRE SIGNAL
-// ============================================================
-
-async function expireSignal(
-  signalCode
-) {
-  const cleanCode =
-    normalizeSignalCode(
-      signalCode
-    );
-
-  if (!cleanCode) {
-    return false;
-  }
-
-  const db =
-    getFirestoreDb();
-
-  const rtdb =
-    getRealtimeDatabase();
-
-  const signalRef =
-    db
-      .collection(
-        "signals"
-      )
-      .doc(
-        cleanCode
-      );
-
-  const snapshot =
-    await signalRef.get();
-
-  if (
-    !snapshot.exists
-  ) {
-    return false;
-  }
-
-  const currentData = snapshot.data() || {};
-
-  if (
-    currentData.active === false ||
-    String(currentData.status || "").toUpperCase() === "EXPIRED"
-  ) {
-    return false;
-  }
-
-  await signalRef.set(
-    {
-      active:
-        false,
-
-      status:
-        "EXPIRED",
-
-      expired_at:
-        FieldValue.serverTimestamp(),
-
-      updated_at:
-        FieldValue.serverTimestamp(),
-    },
-    {
-      merge:
-        true,
-    }
-  );
-
-  if (rtdb) {
-    try {
-      await rtdb
-        .ref(
-          `signals/${cleanCode}`
-        )
-        .update({
-          active:
-            false,
-
-          status:
-            "EXPIRED",
-
-          expired_at:
-            new Date().toISOString(),
-
-          updated_at:
-            Date.now(),
-        });
-
-      const liveSnapshot =
-        await rtdb
-          .ref(
-            "live_signal"
-          )
-          .once(
-            "value"
-          );
-
-      const liveData =
-        liveSnapshot.val();
-
-      if (
-        liveData &&
-        normalizeSignalCode(
-          liveData.code
-        ) ===
-          cleanCode
-      ) {
-        await rtdb
-          .ref(
-            "live_signal"
-          )
-          .update({
-            active:
-              false,
-
-            status:
-              "EXPIRED",
-
-            expired_at:
-              new Date().toISOString(),
-
-            timestamp:
-              Date.now(),
-          });
-      }
-
-      const latestSnapshot =
-        await rtdb
-          .ref(
-            "latest_signal"
-          )
-          .once(
-            "value"
-          );
-
-      const latestData =
-        latestSnapshot.val();
-
-      if (
-        latestData &&
-        normalizeSignalCode(
-          latestData.code
-        ) ===
-          cleanCode
-      ) {
-        await rtdb
-          .ref(
-            "latest_signal"
-          )
-          .update({
-            active:
-              false,
-
-            status:
-              "EXPIRED",
-
-            expired_at:
-              new Date().toISOString(),
-
-            timestamp:
-              Date.now(),
-          });
-      }
-    } catch (error) {
-      console.error(
-        `⚠️ RTDB expiry update failed for ${cleanCode}:`,
-        error.message
-      );
-    }
-  }
-
-  console.log(
-    `⏳ Signal ${cleanCode} expired.`
-  );
-
-  return true;
-}
-
-// ============================================================
-// 17. CHECK LIVE SIGNAL EXPIRY
-// ============================================================
-
-async function checkLiveSignalExpiry() {
-  const rtdb =
-    getRealtimeDatabase();
-
-  if (!rtdb) {
-    return;
-  }
-
-  try {
-    const snapshot =
-      await rtdb
-        .ref(
-          "live_signal"
-        )
-        .once(
-          "value"
-        );
-
-    const signal =
-      snapshot.val();
-
-    if (
-      !signal ||
-      !signal.code ||
-      !signal.expires_at
-    ) {
-      return;
-    }
-
-    const expiry =
-      new Date(
-        signal.expires_at
-      );
-
-    if (
-      Number.isNaN(
-        expiry.getTime()
-      )
-    ) {
-      return;
-    }
-
-    if (
-      Date.now() >=
-      expiry.getTime()
-    ) {
-      await expireSignal(
-        signal.code
-      );
-    }
-  } catch (error) {
-    console.error(
-      "⚠️ Live signal expiry check failed:",
-      error.message
-    );
-  }
-}
-
-// ============================================================
-// 18. SCHEDULER STATE
-// ============================================================
-
-let lastTriggeredSession =
-  "";
-
-let schedulerStarted =
-  false;
-
-let schedulerInterval =
-  null;
-
-// ============================================================
-// 18A. DISTRIBUTED SCHEDULER LOCK
-// ============================================================
-
-function schedulerLockId(sessionKey) {
-  return String(sessionKey).replace(/[^A-Z0-9_-]/gi, "_");
-}
-
-async function claimScheduledSession(sessionKey, sessionLabel) {
-  const db = getFirestoreDb();
-  const ref = db.collection("signal_scheduler_locks").doc(schedulerLockId(sessionKey));
-
-  return db.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(ref);
-
-    if (snapshot.exists) {
-      const data = snapshot.data() || {};
-      const status = String(data.status || "").toUpperCase();
-
-      if (status !== "FAILED") {
+      if (!snapshot.exists) {
         return false;
       }
+
+      const data = snapshot.data() || {};
+
+      if (data.telegramSent === true) {
+        return false;
+      }
+
+      if (data.telegramClaimed === true) {
+        const claimedAt = data.telegramClaimedAt;
+
+        const claimedMillis =
+          claimedAt?.toMillis
+            ? claimedAt.toMillis()
+            : (
+                claimedAt instanceof Date
+                  ? claimedAt.getTime()
+                  : 0
+              );
+
+        if (
+          claimedMillis &&
+          Date.now() - claimedMillis < CLAIM_TIMEOUT_MS
+        ) {
+          return false;
+        }
+      }
+
+      transaction.update(ref, {
+        telegramClaimed: true,
+        telegramClaimedAt:
+          FieldValue.serverTimestamp(),
+        telegramSendFailed: false,
+      });
+
+      return true;
     }
-
-    transaction.set(ref, {
-      sessionKey,
-      sessionLabel,
-      status: "CLAIMED",
-      claimedAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
-
-    return true;
-  });
-}
-
-async function completeScheduledSession(sessionKey, signalCode) {
-  const db = getFirestoreDb();
-  await db.collection("signal_scheduler_locks").doc(schedulerLockId(sessionKey)).set({
-    status: "COMPLETED",
-    signalCode,
-    completedAt: FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
-}
-
-async function failScheduledSession(sessionKey, error) {
-  const db = getFirestoreDb();
-  await db.collection("signal_scheduler_locks").doc(schedulerLockId(sessionKey)).set({
-    status: "FAILED",
-    error: String(error?.message || error || "Unknown error").substring(0, 1000),
-    failedAt: FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
-}
-
-// ============================================================
-// 19. SCHEDULER CHECK
-// ============================================================
-
-async function checkAndTriggerScheduledSignals() {
-  await checkLiveSignalExpiry();
-
-  const time =
-    getKampalaTimeParts();
-
-  const sessionLabel =
-    scheduledSessions[
-      time.time
-    ];
-
-  if (!sessionLabel) {
-    return;
-  }
-
-  const sessionKey =
-    `${time.date}_${time.time}`;
-
-  if (
-    lastTriggeredSession ===
-    sessionKey
-  ) {
-    return;
-  }
-
-  const claimed = await claimScheduledSession(
-    sessionKey,
-    sessionLabel
   );
 
   if (!claimed) {
-    lastTriggeredSession = sessionKey;
-    return;
-  }
-
-  lastTriggeredSession =
-    sessionKey;
-
-  console.log(
-    `⏰ Scheduler triggered: ${sessionLabel}`
-  );
-
-  try {
-    const result =
-      await createAndReleaseSignal(
-        sessionLabel
-      );
-
-    await completeScheduledSession(
-      sessionKey,
-      result.code
-    );
-
-    console.log(
-      `✅ Scheduled signal ${result.code} released.`
-    );
-  } catch (error) {
-    console.error(
-      "❌ Scheduled signal creation failed:",
-      error.message
-    );
-
-    await failScheduledSession(
-      sessionKey,
-      error
-    ).catch((lockError) => {
-      console.error(
-        "❌ Failed to update scheduler lock:",
-        lockError.message
-      );
-    });
-
-    lastTriggeredSession =
-      "";
-  }
-}
-
-// ============================================================
-// 20. START SIGNAL SCHEDULER
-// ============================================================
-
-function startSignalScheduler() {
-  if (
-    schedulerStarted
-  ) {
-    console.log(
-      "⚠️ Signal scheduler already running."
-    );
-
-    return;
-  }
-
-  schedulerStarted =
-    true;
-
-  console.log("");
-
-  console.log(
-    "============================================================"
-  );
-
-  console.log(
-    "⏰ SAINT CRYPTO SIGNAL SCHEDULER"
-  );
-
-  console.log(
-    "============================================================"
-  );
-
-  console.log(
-    `📍 Timezone: ${SIGNAL_TIMEZONE}`
-  );
-
-  console.log(
-    "🕖 Sessions: 19:00 / 21:00 / 23:00 EAT"
-  );
-
-  console.log(
-    `💰 Signal profit: $${SIGNAL_PROFIT.toFixed(
-      2
-    )} USDT`
-  );
-
-  console.log(
-    `⏳ Signal expiry: ${SIGNAL_EXPIRY_MINUTES} minutes`
-  );
-
-  console.log(
-    `📊 Symbol: ${SIGNAL_DEFAULT_SYMBOL}`
-  );
-
-  console.log(
-    `📱 Telegram: ${
-      TELEGRAM_BOT_TOKEN &&
-      TELEGRAM_CHAT_ID
-        ? "CONFIGURED"
-        : "NOT CONFIGURED"
-    }`
-  );
-
-  console.log(
-    `🟢 RTDB: ${
-      realtimeDb
-        ? "READY"
-        : "UNAVAILABLE"
-    }`
-  );
-
-  console.log(
-    "============================================================"
-  );
-
-  checkAndTriggerScheduledSignals()
-    .catch(
-      (error) => {
-        console.error(
-          "❌ Initial scheduler check failed:",
-          error.message
-        );
-      }
-    );
-
-  schedulerInterval =
-    setInterval(
-      () => {
-        checkAndTriggerScheduledSignals()
-          .catch(
-            (error) => {
-              console.error(
-                "❌ Scheduler loop error:",
-                error.message
-              );
-            }
-          );
-      },
-      5000
-    );
-
-  console.log(
-    "✅ Signal scheduler is RUNNING."
-  );
-}
-
-// ============================================================
-// 21. STOP SIGNAL SCHEDULER
-// ============================================================
-
-function stopSignalScheduler() {
-  if (
-    schedulerInterval
-  ) {
-    clearInterval(
-      schedulerInterval
-    );
-
-    schedulerInterval =
-      null;
-  }
-
-  schedulerStarted =
-    false;
-
-  console.log(
-    "🛑 Signal scheduler stopped."
-  );
-}
-
-// ============================================================
-// 22. MANUAL SIGNAL
-// ============================================================
-
-async function generateSignalNow(
-  sessionLabel = "MANUAL"
-) {
-  return createAndReleaseSignal(
-    sessionLabel
-  );
-}
-
-// ============================================================
-// 23. GET USER BALANCE
-// ============================================================
-
-async function getUserBalance(
-  userId
-) {
-  if (
-    !validateUserId(
-      userId
-    )
-  ) {
-    throw new Error(
-      "Invalid user ID."
-    );
-  }
-
-  const db =
-    getFirestoreDb();
-
-  const snapshot =
-    await db
-      .collection(
-        "users"
-      )
-      .doc(
-        userId
-      )
-      .get();
-
-  if (
-    !snapshot.exists
-  ) {
-    throw new Error(
-      "User record not found."
-    );
-  }
-
-  const data =
-    snapshot.data() ||
-    {};
-
-  return Number(
-    data.usdt_balance ||
-      0
-  );
-}
-
-// ============================================================
-// 24. SYNC USER BALANCE TO RTDB
-// ============================================================
-
-async function syncUserBalanceToRTDB(
-  userId,
-  balance
-) {
-  if (
-    !validateUserId(
-      userId
-    )
-  ) {
     return false;
   }
 
-  const rtdb =
-    getRealtimeDatabase();
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const sent = await sendTelegramAlert(message);
+
+    if (sent) {
+      await ref.set(
+        {
+          telegramClaimed: true,
+          telegramSent: true,
+          telegramSentAt:
+            FieldValue.serverTimestamp(),
+          telegramSendFailed: false,
+          telegramSendAttempts: attempt,
+        },
+        { merge: true }
+      );
+
+      return true;
+    }
+
+    if (attempt < 3) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, 1500)
+      );
+    }
+  }
+
+  await ref.set(
+    {
+      telegramClaimed: false,
+      telegramSendFailed: true,
+      telegramSendFailedAt:
+        FieldValue.serverTimestamp(),
+      telegramSendError:
+        "Telegram delivery failed after 3 attempts",
+    },
+    { merge: true }
+  );
+
+  return false;
+}
+
+// ============================================================
+// 11. LEGACY USER BALANCE COMPATIBILITY
+// ============================================================
+// The new financial system uses:
+//   locked_trading_capital_ugx
+//   payout_balance_ugx
+//
+// These helpers remain only so older modules do not crash while
+// the Flutter frontend is being migrated.
+
+async function getUserBalance(userId) {
+  if (!validateUserId(userId)) {
+    throw new Error("Invalid user ID.");
+  }
+
+  const db = getFirestoreDb();
+
+  const snapshot = await db
+    .collection("users")
+    .doc(userId)
+    .get();
+
+  if (!snapshot.exists) {
+    throw new Error("User record not found.");
+  }
+
+  const data = snapshot.data() || {};
+
+  // Prefer the new withdrawable payout balance.
+  if (
+    Number.isFinite(
+      Number(data.payout_balance_ugx)
+    )
+  ) {
+    return Number(data.payout_balance_ugx);
+  }
+
+  // Compatibility only for older records.
+  return Number(data.usdt_balance || 0);
+}
+
+async function syncUserBalanceToRTDB(userId, balance) {
+  if (!validateUserId(userId)) {
+    return false;
+  }
+
+  const rtdb = getRealtimeDatabase();
 
   if (!rtdb) {
     return false;
   }
 
-  const numericBalance =
-    Number(
-      balance
-    );
+  const numericBalance = Number(balance);
 
-  if (
-    !Number.isFinite(
-      numericBalance
-    )
-  ) {
+  if (!Number.isFinite(numericBalance)) {
     return false;
   }
 
   try {
     await rtdb
-      .ref(
-        `users/${userId}`
-      )
+      .ref(`users/${userId}`)
       .update({
-        usdt_balance:
-          Number(
-            numericBalance.toFixed(
-              4
-            )
-          ),
-
-        last_updated:
-          Date.now(),
+        payout_balance_ugx: Math.round(
+          numericBalance
+        ),
+        // Keep old key temporarily for frontend compatibility.
+        usdt_balance: Number(
+          numericBalance.toFixed(4)
+        ),
+        last_updated: Date.now(),
       });
 
     return true;
@@ -1759,92 +594,61 @@ async function syncUserBalanceToRTDB(
 }
 
 // ============================================================
-// 25. ACCOUNT FREEZE CHECK
+// 12. ACCOUNT FREEZE CHECK
 // ============================================================
 
-async function isAccountFrozen(
-  userId
-) {
-  if (
-    !validateUserId(
-      userId
-    )
-  ) {
+async function isAccountFrozen(userId) {
+  if (!validateUserId(userId)) {
     return true;
   }
 
   try {
-    const rtdb =
-      getRealtimeDatabase();
+    const rtdb = getRealtimeDatabase();
 
     if (rtdb) {
-      const globalFreezeSnapshot =
-        await rtdb
-          .ref(
-            "system_control/trading_frozen"
-          )
-          .once(
-            "value"
-          );
+      const globalFreezeSnapshot = await rtdb
+        .ref("system_control/trading_frozen")
+        .once("value");
 
-      if (
-        globalFreezeSnapshot.val() ===
-        true
-      ) {
+      if (globalFreezeSnapshot.val() === true) {
         console.warn(
           "🧊 Global trading freeze is active."
         );
-
         return true;
       }
     }
 
-    const db =
-      getFirestoreDb();
+    const db = getFirestoreDb();
 
-    const userSnapshot =
-      await db
-        .collection(
-          "users"
-        )
-        .doc(
-          userId
-        )
-        .get();
+    const userSnapshot = await db
+      .collection("users")
+      .doc(userId)
+      .get();
 
-    if (
-      !userSnapshot.exists
-    ) {
+    if (!userSnapshot.exists) {
       return false;
     }
 
     const userData =
-      userSnapshot.data() ||
-      {};
+      userSnapshot.data() || {};
 
-    const status =
-      String(
-        userData.status ||
-          ""
-      )
-        .trim()
-        .toUpperCase();
+    const status = String(
+      userData.status || ""
+    )
+      .trim()
+      .toUpperCase();
 
     if (
-      userData.is_frozen ===
-        true ||
+      userData.is_frozen === true ||
       [
         "FROZEN",
         "PAUSED",
         "SUSPENDED",
-      ].includes(
-        status
-      )
+      ].includes(status)
     ) {
       console.warn(
         `🧊 Account ${userId} is frozen.`
       );
-
       return true;
     }
 
@@ -1855,36 +659,28 @@ async function isAccountFrozen(
       error.message
     );
 
+    // Fail closed for account safety.
     return true;
   }
 }
 
 // ============================================================
-// 26. WITHDRAWAL FREEZE
+// 13. WITHDRAWAL FREEZE
 // ============================================================
 
 async function areWithdrawalsFrozen() {
-  const rtdb =
-    getRealtimeDatabase();
+  const rtdb = getRealtimeDatabase();
 
   if (!rtdb) {
     return false;
   }
 
   try {
-    const snapshot =
-      await rtdb
-        .ref(
-          "system_control/withdrawals_frozen"
-        )
-        .once(
-          "value"
-        );
+    const snapshot = await rtdb
+      .ref("system_control/withdrawals_frozen")
+      .once("value");
 
-    return (
-      snapshot.val() ===
-      true
-    );
+    return snapshot.val() === true;
   } catch (error) {
     console.error(
       "⚠️ Withdrawal freeze check failed:",
@@ -1896,68 +692,82 @@ async function areWithdrawalsFrozen() {
 }
 
 // ============================================================
-// 27. MANAGER STATUS
+// 14. MANAGER STATUS
 // ============================================================
 
 function getManagerStatus() {
   return {
-    firebase:
-      !!firebaseApp,
+    firebase: !!firebaseApp,
+    firestore: !!firestoreDb,
+    realtimeDatabase: !!realtimeDb,
+    telegram: !!(
+      TELEGRAM_BOT_TOKEN &&
+      TELEGRAM_CHAT_ID
+    ),
 
-    firestore:
-      !!firestoreDb,
+    timezone: SIGNAL_TIMEZONE,
 
-    realtimeDatabase:
-      !!realtimeDb,
-
-    scheduler:
-      schedulerStarted,
-
-    telegram:
-      !!(
-        TELEGRAM_BOT_TOKEN &&
-        TELEGRAM_CHAT_ID
-      ),
-
-    timezone:
-      SIGNAL_TIMEZONE,
-
-    signalProfit:
-      SIGNAL_PROFIT,
-
+    // New architecture information.
+    signalRewardUgx: SIGNAL_REWARD_UGX,
+    signalProcessingMinutes:
+      SIGNAL_PROCESSING_MINUTES,
     signalExpiryMinutes:
       SIGNAL_EXPIRY_MINUTES,
 
-    symbol:
-      SIGNAL_DEFAULT_SYMBOL,
+    symbol: SIGNAL_DEFAULT_SYMBOL,
 
-    sessions:
-      scheduledSessions,
+    signalSchedule: {
+      timezone: "Africa/Kampala",
+      days: "Monday-Friday",
+      time: "21:00",
+    },
+
+    financialArchitecture: {
+      recharge: "Mobile Money / manual admin approval",
+      tradingCapital:
+        "locked_trading_capital_ugx",
+      payoutBalance:
+        "payout_balance_ugx",
+      withdrawal:
+        "Mobile Money / manual admin disbursement",
+      withdrawalFeePercent: 5,
+      cryptoWithdrawal: false,
+    },
+
+    scheduler: {
+      owner: "services/scheduler.js",
+      legacySchedulerRemoved: true,
+    },
+
+    signalEngine: {
+      owner: "services/signal.js",
+      redemptionOwner: "services/signal.js",
+      payoutProcessorOwner:
+        "services/signal.js",
+    },
   };
 }
 
 // ============================================================
-// 28. SHUTDOWN
+// 15. SHUTDOWN
 // ============================================================
+// Do NOT stop services/scheduler.js or services/signal.js here.
+// index.js owns their lifecycle.
 
 async function shutdown() {
-  stopSignalScheduler();
-
   console.log(
     "🧹 firebase_manager.js shutdown complete."
   );
 }
 
 // ============================================================
-// 29. EXPORTS
+// 16. EXPORTS
 // ============================================================
 
 module.exports = {
   initializeFirebase,
 
-  // Keep the existing backend API name.
-  getFirestore:
-    getFirestoreDb,
+  getFirestore: getFirestoreDb,
 
   getRealtimeDatabase,
 
@@ -1967,33 +777,19 @@ module.exports = {
 
   generateSignalCode,
 
-  createAndReleaseSignal,
+  // Compatibility Telegram helpers.
+  sendTelegramAlert,
+  sendSignalTelegramOnce,
+  sendBackendOnlineAlert,
 
-  generateSignalNow,
-
-  expireSignal,
-
-  checkLiveSignalExpiry,
-
-  checkAndTriggerScheduledSignals,
-
-  startSignalScheduler,
-
-  stopSignalScheduler,
-
+  // Compatibility balance helpers.
   getUserBalance,
-
   syncUserBalanceToRTDB,
 
   isAccountFrozen,
-
   areWithdrawalsFrozen,
 
-  sendTelegramAlert,
-
-  sendSignalTelegramOnce,
-
-  sendBackendOnlineAlert,
+  getKampalaTimeParts,
 
   getManagerStatus,
 
