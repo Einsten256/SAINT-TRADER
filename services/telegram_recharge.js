@@ -779,28 +779,42 @@ async function startTelegramRechargeBot() {
 }
 
 async function stopTelegramRechargeBot() {
-  if (!bot) {
+  const currentBot = bot;
+
+  if (!currentBot) {
     started = false;
     polling = false;
 
     return {
       stopped: true,
       wasRunning: false,
+      pollingStopped: false,
     };
   }
 
+  let pollingStopped = false;
+
   try {
-    if (
-      typeof bot.stopPolling ===
-      "function"
-    ) {
-      await bot.stopPolling();
+    if (typeof currentBot.stopPolling === "function") {
+      await currentBot.stopPolling();
+      pollingStopped = true;
+    } else if (typeof currentBot.stop === "function") {
+      await currentBot.stop();
+      pollingStopped = true;
     }
   } catch (error) {
-    console.error(
-      "[telegram recharge] stop polling failed:",
-      error?.message || error
-    );
+    const message = String(error?.message || error || "");
+
+    // During a Render/SIGTERM shutdown, some Telegram wrappers expose the
+    // polling client without a stopPolling method. The process itself is
+    // already terminating, so do not turn graceful shutdown into a scary
+    // error log. Report only unexpected cleanup failures.
+    if (!/stopPolling.*not a function/i.test(message)) {
+      console.warn(
+        "[telegram recharge] graceful stop warning:",
+        message
+      );
+    }
   }
 
   bot = null;
@@ -810,6 +824,7 @@ async function stopTelegramRechargeBot() {
   return {
     stopped: true,
     wasRunning: true,
+    pollingStopped,
   };
 }
 

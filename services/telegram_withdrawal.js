@@ -104,7 +104,11 @@ function parseAdminIds() {
 }
 
 function getChatId() {
-  return env("TELEGRAM_CHAT_ID");
+  return (
+    env("TELEGRAM_WITHDRAWAL_CHAT_ID") ||
+    env("TELEGRAM_ADMIN_CHAT_ID") ||
+    env("TELEGRAM_CHAT_ID")
+  );
 }
 
 function isConfigured() {
@@ -612,23 +616,41 @@ async function startTelegramWithdrawalBot() {
 }
 
 async function stopTelegramWithdrawalBot() {
-  if (!bot) {
+  const currentBot = bot;
+
+  if (!currentBot) {
     started = false;
     polling = false;
 
     return {
       stopped: true,
       wasRunning: false,
+      pollingStopped: false,
     };
   }
 
+  let pollingStopped = false;
+
   try {
-    await bot.stopPolling();
+    if (typeof currentBot.stopPolling === "function") {
+      await currentBot.stopPolling();
+      pollingStopped = true;
+    } else if (typeof currentBot.stop === "function") {
+      await currentBot.stop();
+      pollingStopped = true;
+    }
   } catch (error) {
-    console.error(
-      "[telegram withdrawal] stop polling failed:",
-      error.message
-    );
+    const message = String(error?.message || error || "");
+
+    // Render/SIGTERM can terminate the process while the Telegram client is
+    // already tearing down. A missing stopPolling method is harmless during
+    // process shutdown; avoid presenting it as a service failure.
+    if (!/stopPolling.*not a function/i.test(message)) {
+      console.warn(
+        "[telegram withdrawal] graceful stop warning:",
+        message
+      );
+    }
   }
 
   bot = null;
@@ -638,6 +660,7 @@ async function stopTelegramWithdrawalBot() {
   return {
     stopped: true,
     wasRunning: true,
+    pollingStopped,
   };
 }
 
