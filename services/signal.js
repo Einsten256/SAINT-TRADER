@@ -4,29 +4,23 @@
  *
  * FINAL DAILY SIGNAL SERVICE
  *
- * BUSINESS RULES
+ * RULES
  * ------------------------------------------------------------
- * 1. One signal per weekday.
- * 2. Signal time: 9:00 PM EAT (Africa/Kampala).
- * 3. Monday-Friday only.
- * 4. Signal code is exactly 12 uppercase alphanumeric characters.
- * 5. Fixed reward: UGX 20,000.
- * 6. User must have qualifying locked trading capital.
- * 7. One redemption per user per signal.
- * 8. Redemption enters PROCESSING for approximately 7 minutes.
- * 9. The payout is NOT credited by Flutter.
- * 10. A durable server-side processor calls the ledger after the
- *     processing time.
- * 11. Payout is credited to payout_balance_ugx only.
- * 12. Locked trading capital is never consumed by a signal payout.
+ * - Monday-Friday only.
+ * - One signal per Kampala date.
+ * - Scheduled at 21:00 Africa/Kampala.
+ * - Exactly 12 uppercase alphanumeric characters.
+ * - Fixed reward: UGX 20,000.
+ * - User must have qualifying locked trading capital.
+ * - One redemption per user per daily signal.
+ * - Redemption is PROCESSING for 7 minutes.
+ * - Server-side processor credits payout_balance_ugx.
+ * - Locked trading capital is never consumed by the payout.
  *
- * FIRESTORE
+ * TELEGRAM
  * ------------------------------------------------------------
- * signals/{signalCode}
- * signal_redemptions/{userId}_{signalCode}
- *
- * This service owns signal redemption state.
- * services/ledger.js owns the actual money movement.
+ * This file owns the DAILY SIGNAL announcement.
+ * The old USD/USDT/20-minute signal message is intentionally gone.
  */
 
 "use strict";
@@ -52,7 +46,7 @@ try {
 }
 
 /* ============================================================
-   CONFIGURATION
+   CONFIG
    ============================================================ */
 
 const SIGNAL_REWARD_UGX = Math.max(
@@ -60,7 +54,7 @@ const SIGNAL_REWARD_UGX = Math.max(
   Math.round(
     Number(
       process.env.SIGNAL_REWARD_UGX ??
-        process.env.SIGNAL_PROFIT_UGX ??
+        process.env.SIGNAL_PAYOUT_UGX ??
         20000
     ) || 20000
   )
@@ -70,43 +64,63 @@ const SIGNAL_PROCESSING_MINUTES = Math.max(
   1,
   Math.round(
     Number(
-      process.env.SIGNAL_PROCESSING_MINUTES ??
-        7
+      process.env.SIGNAL_PROCESSING_MINUTES ?? 7
     ) || 7
   )
 );
 
+// New architecture uses a long-lived daily code.
+// IMPORTANT: do not read the old SIGNAL_EXPIRY_MINUTES env var,
+// because the previous system used a 20-minute USDT signal expiry.
+// Optional new variable: SIGNAL_CODE_EXPIRY_MINUTES.
 const SIGNAL_EXPIRY_MINUTES = Math.max(
   SIGNAL_PROCESSING_MINUTES + 1,
   Math.round(
     Number(
-      process.env.SIGNAL_EXPIRY_MINUTES ??
-        1440
+      process.env.SIGNAL_CODE_EXPIRY_MINUTES ?? 1440
     ) || 1440
   )
 );
 
 const SIGNAL_TIMEZONE =
-  process.env.SIGNAL_TIMEZONE ||
-  "Africa/Kampala";
+  String(
+    process.env.SIGNAL_TIMEZONE ||
+      "Africa/Kampala"
+  ).trim();
 
 const SIGNAL_TIME =
-  process.env.SIGNAL_TIME ||
-  "21:00";
+  String(
+    process.env.SIGNAL_TIME || "21:00"
+  ).trim();
 
 const MIN_LOCKED_CAPITAL_UGX = Math.max(
-  0,
+  1,
   Math.round(
     Number(
-      process.env.SIGNAL_MIN_LOCKED_CAPITAL_UGX ??
-        1
+      process.env.SIGNAL_MIN_LOCKED_CAPITAL_UGX ?? 1
     ) || 1
   )
 );
 
+const SIGNAL_SYMBOL =
+  String(
+    process.env.SIGNAL_DEFAULT_SYMBOL ||
+      "XAUUSD"
+  ).trim().toUpperCase();
+
+const TELEGRAM_BOT_TOKEN =
+  String(
+    process.env.TELEGRAM_BOT_TOKEN || ""
+  ).trim();
+
+const TELEGRAM_CHAT_ID =
+  String(
+    process.env.TELEGRAM_CHAT_ID || ""
+  ).trim();
+
 const SIGNAL_COLLECTION = "signals";
-const REDEMPTION_COLLECTION =
-  "signal_redemptions";
+const DAILY_COLLECTION = "signal_daily";
+const REDEMPTION_COLLECTION = "signal_redemptions";
 const USERS_COLLECTION = "users";
 
 /* ============================================================
@@ -122,14 +136,21 @@ function requireFirestore() {
 }
 
 function validateUserId(userId) {
-  if (!userId || typeof userId !== "string") {
-    throw new Error("Invalid user account.");
+  if (
+    !userId ||
+    typeof userId !== "string"
+  ) {
+    throw new Error(
+      "Invalid user account."
+    );
   }
 
   const uid = userId.trim();
 
   if (!uid) {
-    throw new Error("Invalid user account.");
+    throw new Error(
+      "Invalid user account."
+    );
   }
 
   return uid;
@@ -149,11 +170,22 @@ function normalizeSignalCode(code) {
   return value;
 }
 
-function isFrozen(user) {
-  return (
-    user?.is_frozen === true ||
-    String(user?.status || "").toUpperCase() === "FROZEN"
-  );
+function generateSignalCode() {
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+  let code = "";
+
+  for (let i = 0; i < 12; i += 1) {
+    code += alphabet[
+      crypto.randomInt(
+        0,
+        alphabet.length
+      )
+    ];
+  }
+
+  return code;
 }
 
 function lockedCapitalOf(user) {
@@ -169,13 +201,13 @@ function lockedCapitalOf(user) {
   );
 }
 
-function payoutBalanceOf(user) {
-  return Math.max(
-    0,
-    Math.round(
-      Number(
-        user?.payout_balance_ugx ?? 0
-      ) || 0
+function isFrozen(user) {
+  return (
+    user?.is_frozen === true ||
+    ["FROZEN", "PAUSED", "SUSPENDED"].includes(
+      String(user?.status || "")
+        .trim()
+        .toUpperCase()
     )
   );
 }
@@ -192,8 +224,8 @@ function getKampalaParts(date = new Date()) {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
-        hourCycle: "h23",
         weekday: "short",
+        hourCycle: "h23",
       }
     );
 
@@ -213,78 +245,160 @@ function getKampalaParts(date = new Date()) {
     hour: Number(get("hour")),
     minute: Number(get("minute")),
     second: Number(get("second")),
-    date: `${get("year")}-${get("month")}-${get("day")}`,
-    time: `${get("hour")}:${get("minute")}`,
+    date:
+      `${get("year")}-${get("month")}-${get("day")}`,
+    time:
+      `${get("hour")}:${get("minute")}`,
   };
 }
 
 function isWeekday(parts) {
-  return (
-    parts.weekday === "Mon" ||
-    parts.weekday === "Tue" ||
-    parts.weekday === "Wed" ||
-    parts.weekday === "Thu" ||
-    parts.weekday === "Fri"
-  );
+  return [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+  ].includes(parts.weekday);
 }
 
-function makeProcessingTimestamp(
-  baseDate = new Date()
-) {
+function timestampAfterMinutes(minutes) {
   return Timestamp.fromDate(
     new Date(
-      baseDate.getTime() +
-        SIGNAL_PROCESSING_MINUTES *
+      Date.now() +
+        Math.max(0, Number(minutes) || 0) *
           60 *
           1000
     )
   );
 }
 
-function makeExpiryTimestamp(
-  baseDate = new Date()
-) {
-  return Timestamp.fromDate(
-    new Date(
-      baseDate.getTime() +
-        SIGNAL_EXPIRY_MINUTES *
-          60 *
-          1000
-    )
-  );
+function toMillis(value) {
+  if (!value) return 0;
+
+  if (
+    typeof value.toMillis === "function"
+  ) {
+    return value.toMillis();
+  }
+
+  if (
+    typeof value.toDate === "function"
+  ) {
+    return value.toDate().getTime();
+  }
+
+  const date =
+    new Date(value);
+
+  return Number.isNaN(
+    date.getTime()
+  )
+    ? 0
+    : date.getTime();
 }
 
 /* ============================================================
-   CODE GENERATOR
- * ============================================================ */
+   TELEGRAM
+   ============================================================ */
 
-function generateSignalCode() {
-  const characters =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+function buildTelegramSignalMessage(
+  code,
+  createdAt = new Date()
+) {
+  const kampala =
+    getKampalaParts(createdAt);
 
-  let code = "";
+  return (
+    "🎟️ *SAINT CRYPTO DAILY SIGNAL*\n\n" +
+    `🕘 *Time:* \`${SIGNAL_TIME} EAT\`\n` +
+    "📅 *Schedule:* `Monday-Friday`\n" +
+    `💰 *Reward:* \`UGX ${SIGNAL_REWARD_UGX.toLocaleString()}\`\n` +
+    `🔑 *Signal Code:* \`${code}\`\n\n` +
+    `⏳ *Processing:* ${SIGNAL_PROCESSING_MINUTES} minutes\n` +
+    "👤 *Eligibility:* qualifying locked trading capital\n\n" +
+    "⚡ *Redeem the code in the SAINT CRYPTO app.*"
+  );
+}
 
-  for (let i = 0; i < 12; i += 1) {
-    code +=
-      characters[
-        crypto.randomInt(
-          0,
-          characters.length
-        )
-      ];
+async function sendTelegramSignal(
+  code,
+  createdAt = new Date()
+) {
+  if (
+    !TELEGRAM_BOT_TOKEN ||
+    !TELEGRAM_CHAT_ID
+  ) {
+    console.warn(
+      "⚠️ Daily signal created but Telegram credentials are not configured."
+    );
+
+    return false;
   }
 
-  return code;
+  const message =
+    buildTelegramSignalMessage(
+      code,
+      createdAt
+    );
+
+  const url =
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+
+  try {
+    const response =
+      await fetch(
+        url,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            chat_id:
+              TELEGRAM_CHAT_ID,
+            text: message,
+            parse_mode:
+              "Markdown",
+          }),
+        }
+      );
+
+    const data =
+      await response.json();
+
+    if (
+      response.ok &&
+      data.ok === true
+    ) {
+      console.log(
+        `📱 Daily signal ${code} sent to Telegram.`
+      );
+
+      return true;
+    }
+
+    console.error(
+      "❌ Daily signal Telegram error:",
+      data.description ||
+        "Unknown Telegram error"
+    );
+
+    return false;
+  } catch (error) {
+    console.error(
+      "❌ Daily signal Telegram request failed:",
+      error.message
+    );
+
+    return false;
+  }
 }
 
 /* ============================================================
    CREATE SIGNAL
- *
- * Called by firebase_manager.js at 21:00 EAT Monday-Friday.
- *
- * The scheduler may retry, therefore this function is safe
- * against an existing signal for the same Kampala date.
- * ============================================================ */
+   ============================================================ */
 
 async function createSignal({
   session = "9:00 PM EAT",
@@ -294,7 +408,8 @@ async function createSignal({
   requireFirestore();
 
   const now = new Date();
-  const kampala = getKampalaParts(now);
+  const kampala =
+    getKampalaParts(now);
 
   if (!force) {
     if (!isWeekday(kampala)) {
@@ -303,30 +418,21 @@ async function createSignal({
       );
     }
 
-    if (SIGNAL_TIME) {
-      const currentTime =
-        `${String(kampala.hour).padStart(2, "0")}:` +
-        `${String(kampala.minute).padStart(2, "0")}`;
-
-      /*
-       * Allow the scheduler a small execution window around
-       * 21:00 rather than requiring the exact second.
-       */
-      if (currentTime !== SIGNAL_TIME) {
-        throw new Error(
-          `Signal generation is scheduled for ${SIGNAL_TIME} EAT.`
-        );
-      }
+    if (
+      `${String(kampala.hour).padStart(2, "0")}:` +
+        `${String(kampala.minute).padStart(2, "0")}` !==
+      SIGNAL_TIME
+    ) {
+      throw new Error(
+        `Signal generation is scheduled for ${SIGNAL_TIME} EAT.`
+      );
     }
   }
 
-  /*
-   * A daily signal document keyed by date gives us an additional
-   * durable uniqueness guard.
-   */
-  const dailyRef = firestore
-    .collection("signal_daily")
-    .doc(kampala.date);
+  const dailyRef =
+    firestore
+      .collection(DAILY_COLLECTION)
+      .doc(kampala.date);
 
   const existingDaily =
     await dailyRef.get();
@@ -356,27 +462,31 @@ async function createSignal({
     }
   }
 
-  let signalCode = null;
+  let code = "";
 
-  for (let attempt = 0; attempt < 10; attempt += 1) {
+  for (
+    let attempt = 0;
+    attempt < 20;
+    attempt += 1
+  ) {
     const candidate =
       generateSignalCode();
 
-    const ref =
+    const candidateRef =
       firestore
         .collection(SIGNAL_COLLECTION)
         .doc(candidate);
 
-    const exists =
-      await ref.get();
+    const candidateDoc =
+      await candidateRef.get();
 
-    if (!exists.exists) {
-      signalCode = candidate;
+    if (!candidateDoc.exists) {
+      code = candidate;
       break;
     }
   }
 
-  if (!signalCode) {
+  if (!code) {
     throw new Error(
       "Unable to generate a unique signal code."
     );
@@ -385,127 +495,252 @@ async function createSignal({
   const signalRef =
     firestore
       .collection(SIGNAL_COLLECTION)
-      .doc(signalCode);
-
-  const createdAt =
-    FieldValue.serverTimestamp();
+      .doc(code);
 
   const expiresAt =
-    makeExpiryTimestamp(now);
+    timestampAfterMinutes(
+      SIGNAL_EXPIRY_MINUTES
+    );
 
-  const signalRecord = {
-    code: signalCode,
+  let created = false;
 
-    rewardUgx:
-      SIGNAL_REWARD_UGX,
+  try {
+    await firestore.runTransaction(
+      async (transaction) => {
+        const dailyDoc =
+          await transaction.get(
+            dailyRef
+          );
 
-    profit:
-      SIGNAL_REWARD_UGX,
+        if (
+          dailyDoc.exists &&
+          dailyDoc.data()?.signalCode
+        ) {
+          throw new Error(
+            "A daily signal has already been created."
+          );
+        }
 
-    currency: "UGX",
+        transaction.create(
+          signalRef,
+          {
+            code,
 
-    symbol:
-      process.env.SIGNAL_DEFAULT_SYMBOL ||
-      "SAINT",
+            rewardUgx:
+              SIGNAL_REWARD_UGX,
 
-    session,
+            profit:
+              SIGNAL_REWARD_UGX,
 
-    status:
-      "PROFIT_VERIFIED",
+            currency:
+              "UGX",
 
-    active: true,
+            symbol:
+              SIGNAL_SYMBOL,
 
-    isRedeemed: false,
+            session,
 
-    date:
-      kampala.date,
+            status:
+              "PROFIT_VERIFIED",
 
-    timezone:
-      SIGNAL_TIMEZONE,
+            active: true,
 
-    scheduledTime:
-      SIGNAL_TIME,
+            isRedeemed: false,
 
-    processingMinutes:
-      SIGNAL_PROCESSING_MINUTES,
+            date:
+              kampala.date,
 
-    createdBy,
+            timezone:
+              SIGNAL_TIMEZONE,
 
-    createdAt,
-    created_at: createdAt,
+            scheduledTime:
+              SIGNAL_TIME,
 
-    expiresAt,
-    expires_at: expiresAt,
+            processingMinutes:
+              SIGNAL_PROCESSING_MINUTES,
 
-    createdAtIso:
-      now.toISOString(),
+            expiryMinutes:
+              SIGNAL_EXPIRY_MINUTES,
 
-    updatedAt:
-      FieldValue.serverTimestamp(),
-  };
+            createdBy,
 
-  /*
-   * Transactionally claim the daily date.
-   *
-   * This prevents two scheduler instances from creating two
-   * signals for the same Kampala date.
-   */
-  await firestore.runTransaction(
-    async (transaction) => {
-      const dailyDoc =
-        await transaction.get(
-          dailyRef
+            createdAt:
+              FieldValue.serverTimestamp(),
+
+            created_at:
+              FieldValue.serverTimestamp(),
+
+            expiresAt,
+
+            expires_at:
+              expiresAt,
+
+            telegramSent:
+              false,
+
+            telegramSentAt:
+              null,
+
+            updatedAt:
+              FieldValue.serverTimestamp(),
+          }
         );
+
+        transaction.create(
+          dailyRef,
+          {
+            date:
+              kampala.date,
+
+            signalCode:
+              code,
+
+            rewardUgx:
+              SIGNAL_REWARD_UGX,
+
+            timezone:
+              SIGNAL_TIMEZONE,
+
+            scheduledTime:
+              SIGNAL_TIME,
+
+            createdAt:
+              FieldValue.serverTimestamp(),
+          }
+        );
+
+        created = true;
+      }
+    );
+  } catch (error) {
+    if (
+      error.message ===
+      "A daily signal has already been created."
+    ) {
+      const retry =
+        await dailyRef.get();
 
       if (
-        dailyDoc.exists &&
-        dailyDoc.data()?.signalCode
+        retry.exists &&
+        retry.data()?.signalCode
       ) {
-        throw new Error(
-          "A daily signal has already been created."
-        );
-      }
+        const existingCode =
+          retry.data().signalCode;
 
-      transaction.create(
-        signalRef,
-        signalRecord
-      );
+        const existing =
+          await firestore
+            .collection(SIGNAL_COLLECTION)
+            .doc(existingCode)
+            .get();
 
-      transaction.create(
-        dailyRef,
-        {
-          date:
-            kampala.date,
-          signalCode,
-          timezone:
-            SIGNAL_TIMEZONE,
-          scheduledTime:
-            SIGNAL_TIME,
-          createdAt:
-            FieldValue.serverTimestamp(),
+        if (existing.exists) {
+          return {
+            success: true,
+            alreadyExists: true,
+            signal: {
+              code: existingCode,
+              ...existing.data(),
+            },
+          };
         }
-      );
+      }
     }
+
+    throw error;
+  }
+
+  if (!created) {
+    throw new Error(
+      "Daily signal was not created."
+    );
+  }
+
+  const telegramSent =
+    await sendTelegramSignal(
+      code,
+      now
+    );
+
+  await signalRef.set(
+    {
+      telegramSent,
+      telegramSentAt:
+        telegramSent
+          ? FieldValue.serverTimestamp()
+          : null,
+      telegramDeliveryStatus:
+        telegramSent
+          ? "SENT"
+          : "FAILED",
+      updatedAt:
+        FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  console.log("");
+  console.log(
+    "============================================================"
+  );
+  console.log(
+    "🎟️ SAINT CRYPTO DAILY SIGNAL"
+  );
+  console.log(
+    "============================================================"
+  );
+  console.log(
+    `📅 Date: ${kampala.date}`
+  );
+  console.log(
+    `🕘 Time: ${SIGNAL_TIME} EAT`
+  );
+  console.log(
+    `🔑 Code: ${code}`
+  );
+  console.log(
+    `💰 Reward: UGX ${SIGNAL_REWARD_UGX.toLocaleString()}`
+  );
+  console.log(
+    `⏳ Processing: ${SIGNAL_PROCESSING_MINUTES} minutes`
+  );
+  console.log(
+    `📱 Telegram: ${telegramSent ? "SENT" : "FAILED"}`
+  );
+  console.log(
+    "============================================================"
   );
 
   return {
     success: true,
     alreadyExists: false,
+    telegramSent,
     signal: {
-      code: signalCode,
-      ...signalRecord,
+      code,
+      rewardUgx:
+        SIGNAL_REWARD_UGX,
+      currency: "UGX",
+      symbol:
+        SIGNAL_SYMBOL,
+      session,
+      status:
+        "PROFIT_VERIFIED",
+      active: true,
+      processingMinutes:
+        SIGNAL_PROCESSING_MINUTES,
+      expiryMinutes:
+        SIGNAL_EXPIRY_MINUTES,
+      createdAt:
+        now.toISOString(),
     },
   };
 }
 
 /* ============================================================
-   GET ACTIVE SIGNAL
- * ============================================================ */
+   READ SIGNALS
+   ============================================================ */
 
 async function getActiveSignal() {
   requireFirestore();
-
-  const now = new Date();
 
   const snapshot =
     await firestore
@@ -518,61 +753,59 @@ async function getActiveSignal() {
       .limit(20)
       .get();
 
-  const activeSignals =
+  const now =
+    Date.now();
+
+  const active =
     snapshot.docs
       .map((doc) => ({
         code: doc.id,
         ...doc.data(),
       }))
       .filter((signal) => {
-        const expires =
-          signal.expiresAt
-            ?.toDate?.();
+        const expiry =
+          toMillis(
+            signal.expiresAt ||
+              signal.expires_at
+          );
 
         return (
-          !expires ||
-          expires.getTime() > now.getTime()
+          !expiry ||
+          expiry > now
         );
       })
-      .sort((a, b) => {
-        const aTime =
-          a.createdAt
-            ?.toMillis?.() || 0;
-
-        const bTime =
-          b.createdAt
-            ?.toMillis?.() || 0;
-
-        return bTime - aTime;
-      });
+      .sort(
+        (a, b) =>
+          toMillis(
+            b.createdAt
+          ) -
+          toMillis(
+            a.createdAt
+          )
+      );
 
   return {
     success: true,
     signal:
-      activeSignals[0] || null,
+      active[0] || null,
     rewardUgx:
       SIGNAL_REWARD_UGX,
-    currency: "UGX",
+    currency:
+      "UGX",
   };
 }
-
-/* ============================================================
-   GET SIGNAL BY CODE
- * ============================================================ */
 
 async function getSignal(code) {
   requireFirestore();
 
-  const signalCode =
+  const clean =
     normalizeSignalCode(code);
 
-  const ref =
-    firestore
-      .collection(SIGNAL_COLLECTION)
-      .doc(signalCode);
-
   const snapshot =
-    await ref.get();
+    await firestore
+      .collection(SIGNAL_COLLECTION)
+      .doc(clean)
+      .get();
 
   if (!snapshot.exists) {
     throw new Error(
@@ -590,21 +823,8 @@ async function getSignal(code) {
 }
 
 /* ============================================================
-   REDEEM SIGNAL
- *
- * This does NOT credit money.
- *
- * It:
- *   - validates code
- *   - validates user
- *   - validates locked capital
- *   - prevents duplicate redemption
- *   - creates PROCESSING redemption
- *   - sets creditAt approximately 7 minutes ahead
- *
- * The processor later calls:
- *   ledger.creditSignalPayoutToLedger()
- * ============================================================ */
+   REDEEM
+   ============================================================ */
 
 async function redeemSignal(
   userId,
@@ -615,17 +835,17 @@ async function redeemSignal(
   const uid =
     validateUserId(userId);
 
-  const signalCode =
+  const code =
     normalizeSignalCode(
       body.code ??
-      body.signalCode ??
-      body.signal_code
+        body.signalCode ??
+        body.signal_code
     );
 
   const signalRef =
     firestore
       .collection(SIGNAL_COLLECTION)
-      .doc(signalCode);
+      .doc(code);
 
   const userRef =
     firestore
@@ -633,7 +853,7 @@ async function redeemSignal(
       .doc(uid);
 
   const redemptionId =
-    `${uid}_${signalCode}`;
+    `${uid}_${code}`;
 
   const redemptionRef =
     firestore
@@ -663,9 +883,6 @@ async function redeemSignal(
           redemptionRef
         );
 
-      /*
-       * Duplicate protection.
-       */
       if (redemptionDoc.exists) {
         const existing =
           redemptionDoc.data() || {};
@@ -674,12 +891,14 @@ async function redeemSignal(
           success: true,
           alreadyRedeemed: true,
           redemptionId,
+          signalCode: code,
           status:
             existing.status ||
             "PROCESSING",
           rewardUgx:
             existing.rewardUgx ??
             SIGNAL_REWARD_UGX,
+          currency: "UGX",
           creditAt:
             existing.creditAt ||
             null,
@@ -708,9 +927,6 @@ async function redeemSignal(
         );
       }
 
-      /*
-       * Signal must be active and verified.
-       */
       if (
         signal.active !== true ||
         String(
@@ -723,17 +939,15 @@ async function redeemSignal(
         );
       }
 
-      /*
-       * Expiry protection.
-       */
-      const expiresAt =
-        signal.expiresAt
-          ?.toDate?.();
+      const expiry =
+        toMillis(
+          signal.expiresAt ||
+            signal.expires_at
+        );
 
       if (
-        expiresAt &&
-        expiresAt.getTime() <=
-          Date.now()
+        expiry &&
+        expiry <= Date.now()
       ) {
         throw new Error(
           "This signal has expired."
@@ -752,17 +966,9 @@ async function redeemSignal(
         );
       }
 
-      const createdAtDate =
-        new Date();
-
       const creditAt =
-        makeProcessingTimestamp(
-          createdAtDate
-        );
-
-      const processingExpiresAt =
-        makeExpiryTimestamp(
-          createdAtDate
+        timestampAfterMinutes(
+          SIGNAL_PROCESSING_MINUTES
         );
 
       transaction.create(
@@ -770,16 +976,19 @@ async function redeemSignal(
         {
           redemptionId,
 
-          userId: uid,
+          userId:
+            uid,
 
-          signalCode,
+          signalCode:
+            code,
 
-          code: signalCode,
+          code,
 
           rewardUgx:
             SIGNAL_REWARD_UGX,
 
-          currency: "UGX",
+          currency:
+            "UGX",
 
           lockedTradingCapitalUgx:
             lockedCapital,
@@ -792,14 +1001,11 @@ async function redeemSignal(
 
           creditAt,
 
-          processingStartedAt:
-            FieldValue.serverTimestamp(),
-
           processingMinutes:
             SIGNAL_PROCESSING_MINUTES,
 
-          expiresAt:
-            processingExpiresAt,
+          processingStartedAt:
+            FieldValue.serverTimestamp(),
 
           createdAt:
             FieldValue.serverTimestamp(),
@@ -809,19 +1015,17 @@ async function redeemSignal(
         }
       );
 
-      /*
-       * Do not modify payout balance here.
-       * Do not modify locked capital here.
-       */
       result = {
         success: true,
         alreadyRedeemed: false,
         redemptionId,
-        signalCode,
-        status: "PROCESSING",
+        signalCode: code,
+        status:
+          "PROCESSING",
         rewardUgx:
           SIGNAL_REWARD_UGX,
-        currency: "UGX",
+        currency:
+          "UGX",
         processingMinutes:
           SIGNAL_PROCESSING_MINUTES,
         creditAt,
@@ -833,328 +1037,13 @@ async function redeemSignal(
 }
 
 /* ============================================================
-   PROCESS ONE SIGNAL PAYOUT
- *
- * Durable processor entry point.
- *
- * Safe to call repeatedly:
- *   PROCESSING -> CREDITED
- *   CREDITED    -> already credited
- *
- * The ledger transaction performs the atomic balance credit.
- * ============================================================ */
+   PAYOUT PROCESSOR
+   ============================================================ */
 
 async function processSignalRedemption(
   redemptionId
 ) {
   requireFirestore();
-
-  if (
-    !redemptionId ||
-    typeof redemptionId !== "string"
-  ) {
-    throw new Error(
-      "Redemption ID is required."
-    );
-  }
-
-  const redemptionRef =
-    firestore
-      .collection(
-        REDEMPTION_COLLECTION
-      )
-      .doc(redemptionId);
-
-  const snapshot =
-    await redemptionRef.get();
-
-  if (!snapshot.exists) {
-    throw new Error(
-      "Signal redemption could not be found."
-    );
-  }
-
-  const redemption =
-    snapshot.data() || {};
-
-  if (
-    redemption.status ===
-      "CREDITED" &&
-    redemption.creditedToLedger ===
-      true
-  ) {
-    return {
-      success: true,
-      alreadyCredited: true,
-      redemptionId,
-      status: "CREDITED",
-      amountUgx:
-        redemption.creditedAmountUgx ??
-        redemption.rewardUgx ??
-        SIGNAL_REWARD_UGX,
-    };
-  }
-
-  if (
-    redemption.status !==
-    "PROCESSING"
-  ) {
-    throw new Error(
-      `Redemption cannot be processed from status ${
-        redemption.status || "UNKNOWN"
-      }.`
-    );
-  }
-
-  const creditAt =
-    redemption.creditAt
-      ?.toDate?.();
-
-  if (
-    creditAt &&
-    creditAt.getTime() >
-      Date.now()
-  ) {
-    return {
-      success: true,
-      ready: false,
-      redemptionId,
-      status: "PROCESSING",
-      creditAt:
-        redemption.creditAt,
-    };
-  }
-
-  const result =
-    await ledger.creditSignalPayoutToLedger(
-      {
-        redemptionId,
-        userId:
-          redemption.userId,
-        amountUgx:
-          redemption.rewardUgx ??
-          SIGNAL_REWARD_UGX,
-        record: {
-          signalCode:
-            redemption.signalCode ||
-            redemption.code ||
-            null,
-          processor:
-            "SIGNAL_PAYOUT_PROCESSOR",
-        },
-      }
-    );
-
-  return {
-    success: true,
-    ready: true,
-    alreadyCredited:
-      result.alreadyCredited,
-    redemptionId,
-    userId:
-      redemption.userId,
-    status:
-      result.alreadyCredited
-        ? "CREDITED"
-        : "CREDITED",
-    amountUgx:
-      redemption.rewardUgx ??
-      SIGNAL_REWARD_UGX,
-  };
-}
-
-/* ============================================================
-   PROCESS DUE REDEMPTIONS
- *
- * This is designed to be called repeatedly by a server-side
- * interval or startup recovery process.
- *
- * Because each redemption is idempotent, server restarts do not
- * lose payouts.
- * ============================================================ */
-
-async function processDueSignalRedemptions(
-  limit = 100
-) {
-  requireFirestore();
-
-  let count =
-    Number.parseInt(
-      limit,
-      10
-    );
-
-  if (!Number.isFinite(count)) {
-    count = 100;
-  }
-
-  count = Math.min(
-    Math.max(count, 1),
-    250
-  );
-
-  const now =
-    Timestamp.now();
-
-  const snapshot =
-    await firestore
-      .collection(
-        REDEMPTION_COLLECTION
-      )
-      .where(
-        "status",
-        "==",
-        "PROCESSING"
-      )
-      .where(
-        "creditAt",
-        "<=",
-        now
-      )
-      .limit(count)
-      .get();
-
-  const results = [];
-
-  for (
-    const doc of snapshot.docs
-  ) {
-    try {
-      const result =
-        await processSignalRedemption(
-          doc.id
-        );
-
-      results.push(result);
-    } catch (error) {
-      console.error(
-        `❌ Signal payout ${doc.id}:`,
-        error.message
-      );
-
-      results.push({
-        success: false,
-        redemptionId:
-          doc.id,
-        error:
-          error.message,
-      });
-    }
-  }
-
-  return {
-    success: true,
-    processed:
-      results.length,
-    results,
-  };
-}
-
-/* ============================================================
-   START DURABLE PAYOUT PROCESSOR
- *
- * Runs every 15 seconds.
- *
- * The processor is intentionally independent from Flutter.
- * A restart simply resumes processing from Firestore.
- * ============================================================ */
-
-let payoutProcessorTimer =
-  null;
-
-function startSignalPayoutProcessor({
-  intervalMs = 15000,
-} = {}) {
-  if (payoutProcessorTimer) {
-    return {
-      success: true,
-      alreadyRunning: true,
-    };
-  }
-
-  const interval =
-    Math.max(
-      5000,
-      Number(intervalMs) ||
-        15000
-    );
-
-  const run = async () => {
-    try {
-      await processDueSignalRedemptions(
-        100
-      );
-    } catch (error) {
-      console.error(
-        "❌ Signal payout processor:",
-        error.message
-      );
-    }
-  };
-
-  /*
-   * Recover any payouts that became due while the server was
-   * offline.
-   */
-  run();
-
-  payoutProcessorTimer =
-    setInterval(
-      run,
-      interval
-    );
-
-  if (
-    typeof payoutProcessorTimer.unref ===
-    "function"
-  ) {
-    payoutProcessorTimer.unref();
-  }
-
-  console.log(
-    `✅ Signal payout processor started (${interval}ms interval).`
-  );
-
-  return {
-    success: true,
-    alreadyRunning: false,
-    intervalMs: interval,
-  };
-}
-
-function stopSignalPayoutProcessor() {
-  if (!payoutProcessorTimer) {
-    return {
-      success: true,
-      alreadyStopped: true,
-    };
-  }
-
-  clearInterval(
-    payoutProcessorTimer
-  );
-
-  payoutProcessorTimer =
-    null;
-
-  return {
-    success: true,
-    stopped: true,
-  };
-}
-
-/* ============================================================
-   GET REDEMPTION
- * ============================================================ */
-
-async function getRedemption(
-  userId,
-  redemptionId
-) {
-  requireFirestore();
-
-  const uid =
-    validateUserId(userId);
 
   if (
     !redemptionId ||
@@ -1185,6 +1074,319 @@ async function getRedemption(
     snapshot.data() || {};
 
   if (
+    redemption.status ===
+      "CREDITED" &&
+    redemption.creditedToLedger ===
+      true
+  ) {
+    return {
+      success: true,
+      alreadyCredited: true,
+      redemptionId,
+      status:
+        "CREDITED",
+      amountUgx:
+        redemption.creditedAmountUgx ??
+        redemption.rewardUgx ??
+        SIGNAL_REWARD_UGX,
+    };
+  }
+
+  if (
+    redemption.status !==
+    "PROCESSING"
+  ) {
+    throw new Error(
+      `Redemption cannot be processed from status ${redemption.status || "UNKNOWN"}.`
+    );
+  }
+
+  const creditAt =
+    toMillis(
+      redemption.creditAt
+    );
+
+  if (
+    creditAt &&
+    creditAt > Date.now()
+  ) {
+    return {
+      success: true,
+      ready: false,
+      redemptionId,
+      status:
+        "PROCESSING",
+      creditAt:
+        redemption.creditAt,
+    };
+  }
+
+  const amountUgx =
+    Math.round(
+      Number(
+        redemption.rewardUgx ??
+          SIGNAL_REWARD_UGX
+      ) || SIGNAL_REWARD_UGX
+    );
+
+  const result =
+    await ledger.creditSignalPayoutToLedger(
+      {
+        redemptionId,
+        userId:
+          redemption.userId,
+        amountUgx,
+        record: {
+          signalCode:
+            redemption.signalCode ||
+            redemption.code ||
+            null,
+          processor:
+            "SIGNAL_PAYOUT_PROCESSOR",
+        },
+      }
+    );
+
+  await ref.set(
+    {
+      status:
+        "CREDITED",
+      creditedToLedger:
+        true,
+      creditedAmountUgx:
+        amountUgx,
+      creditedAt:
+        FieldValue.serverTimestamp(),
+      updatedAt:
+        FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return {
+    success: true,
+    ready: true,
+    alreadyCredited:
+      Boolean(
+        result?.alreadyCredited
+      ),
+    redemptionId,
+    userId:
+      redemption.userId,
+    status:
+      "CREDITED",
+    amountUgx,
+  };
+}
+
+async function processDueSignalRedemptions(
+  limit = 100
+) {
+  requireFirestore();
+
+  const count =
+    Math.min(
+      Math.max(
+        Number.parseInt(
+          limit,
+          10
+        ) || 100,
+        1
+      ),
+      250
+    );
+
+  const now =
+    Timestamp.now();
+
+  /*
+   * IMPORTANT:
+   * Query only by creditAt so this lookup uses a single-field
+   * Firestore index. Do not combine status + creditAt here because
+   * that requires a composite index.
+   *
+   * We filter the redemption status in memory before processing.
+   * processSignalRedemption() performs the final status/idempotency
+   * checks inside Firestore, so duplicate processing remains safe.
+   */
+  const snapshot =
+    await firestore
+      .collection(
+        REDEMPTION_COLLECTION
+      )
+      .where(
+        "creditAt",
+        "<=",
+        now
+      )
+      .limit(count)
+      .get();
+
+  const dueDocs =
+    snapshot.docs.filter((doc) => {
+      const data =
+        doc.data() || {};
+
+      return (
+        String(data.status || "").toUpperCase() ===
+        "PROCESSING"
+      );
+    });
+
+  const results = [];
+
+  for (const doc of dueDocs) {
+    try {
+      results.push(
+        await processSignalRedemption(
+          doc.id
+        )
+      );
+    } catch (error) {
+      console.error(
+        `❌ Signal payout ${doc.id}:`,
+        error.message
+      );
+
+      results.push({
+        success: false,
+        redemptionId:
+          doc.id,
+        error:
+          error.message,
+      });
+    }
+  }
+
+  return {
+    success: true,
+    processed:
+      results.length,
+    results,
+  };
+}
+
+let payoutProcessorTimer =
+  null;
+
+function startSignalPayoutProcessor({
+  intervalMs = 15000,
+} = {}) {
+  if (payoutProcessorTimer) {
+    return {
+      success: true,
+      alreadyRunning: true,
+    };
+  }
+
+  const interval =
+    Math.max(
+      5000,
+      Number(intervalMs) ||
+        15000
+    );
+
+  const run =
+    async () => {
+      try {
+        await processDueSignalRedemptions(
+          100
+        );
+      } catch (error) {
+        console.error(
+          "❌ Signal payout processor:",
+          error.message
+        );
+      }
+    };
+
+  run();
+
+  payoutProcessorTimer =
+    setInterval(
+      run,
+      interval
+    );
+
+  if (
+    typeof payoutProcessorTimer.unref ===
+    "function"
+  ) {
+    payoutProcessorTimer.unref();
+  }
+
+  console.log(
+    `✅ Signal payout processor started (${interval}ms interval).`
+  );
+
+  return {
+    success: true,
+    alreadyRunning: false,
+    intervalMs:
+      interval,
+  };
+}
+
+function stopSignalPayoutProcessor() {
+  if (!payoutProcessorTimer) {
+    return {
+      success: true,
+      alreadyStopped: true,
+    };
+  }
+
+  clearInterval(
+    payoutProcessorTimer
+  );
+
+  payoutProcessorTimer = null;
+
+  return {
+    success: true,
+    stopped: true,
+  };
+}
+
+/* ============================================================
+   REDEMPTION READS
+   ============================================================ */
+
+async function getRedemption(
+  userId,
+  redemptionId
+) {
+  requireFirestore();
+
+  const uid =
+    validateUserId(userId);
+
+  if (
+    !redemptionId ||
+    typeof redemptionId !== "string"
+  ) {
+    throw new Error(
+      "Redemption ID is required."
+    );
+  }
+
+  const snapshot =
+    await firestore
+      .collection(
+        REDEMPTION_COLLECTION
+      )
+      .doc(redemptionId)
+      .get();
+
+  if (!snapshot.exists) {
+    throw new Error(
+      "Signal redemption could not be found."
+    );
+  }
+
+  const redemption =
+    snapshot.data() || {};
+
+  if (
     redemption.userId !== uid
   ) {
     throw new Error(
@@ -1202,10 +1404,6 @@ async function getRedemption(
   };
 }
 
-/* ============================================================
-   USER REDEMPTION HISTORY
- * ============================================================ */
-
 async function getRedemptionHistory(
   userId,
   limit = 50
@@ -1215,20 +1413,17 @@ async function getRedemptionHistory(
   const uid =
     validateUserId(userId);
 
-  let count =
-    Number.parseInt(
-      limit,
-      10
+  const count =
+    Math.min(
+      Math.max(
+        Number.parseInt(
+          limit,
+          10
+        ) || 50,
+        1
+      ),
+      100
     );
-
-  if (!Number.isFinite(count)) {
-    count = 50;
-  }
-
-  count = Math.min(
-    Math.max(count, 1),
-    100
-  );
 
   const snapshot =
     await firestore
@@ -1253,54 +1448,56 @@ async function getRedemptionHistory(
     );
 
   records.sort(
-    (a, b) => {
-      const aTime =
-        a.createdAt
-          ?.toMillis?.() || 0;
-
-      const bTime =
+    (a, b) =>
+      toMillis(
         b.createdAt
-          ?.toMillis?.() || 0;
-
-      return bTime - aTime;
-    }
+      ) -
+      toMillis(
+        a.createdAt
+      )
   );
 
   return {
     success: true,
-    redemptions: records,
+    redemptions:
+      records,
   };
 }
-
-/* ============================================================
-   STATUS
- * ============================================================ */
 
 async function getStatus() {
   return {
     success: true,
-    currency: "UGX",
+    currency:
+      "UGX",
     rewardUgx:
       SIGNAL_REWARD_UGX,
     processingMinutes:
       SIGNAL_PROCESSING_MINUTES,
+    expiryMinutes:
+      SIGNAL_EXPIRY_MINUTES,
     signalTime:
       SIGNAL_TIME,
     timezone:
       SIGNAL_TIMEZONE,
-    weekdaysOnly: true,
+    weekdaysOnly:
+      true,
     minimumLockedCapitalUgx:
       MIN_LOCKED_CAPITAL_UGX,
     processorRunning:
       Boolean(
         payoutProcessorTimer
       ),
+    telegramConfigured:
+      Boolean(
+        TELEGRAM_BOT_TOKEN &&
+        TELEGRAM_CHAT_ID
+      ),
   };
 }
 
 /* ============================================================
    EXPORTS
- * ============================================================ */
+   ============================================================ */
 
 module.exports = {
   SIGNAL_REWARD_UGX,
@@ -1311,9 +1508,13 @@ module.exports = {
   MIN_LOCKED_CAPITAL_UGX,
 
   generateSignalCode,
+  normalizeSignalCode,
 
   getKampalaParts,
   isWeekday,
+
+  buildTelegramSignalMessage,
+  sendTelegramSignal,
 
   createSignal,
   getActiveSignal,

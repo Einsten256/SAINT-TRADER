@@ -26,6 +26,11 @@
 //         └── withdrawal.js
 //
 // ============================================================
+// FINAL AUDIT NOTE:
+// Business Manager recharge mutations now pass the canonical
+// deposit-service arguments (adminId, reason) instead of objects
+// that the service would otherwise store incorrectly.
+// ============================================================
 
 "use strict";
 
@@ -2021,7 +2026,7 @@ try {
 // ============================================================
 // Creates exactly one signal for controlled testing.
 // Protected by a private environment key.
-// Does NOT change the normal 7PM / 9PM / 11PM scheduler.
+// Does NOT change the normal Monday-Friday 9PM EAT scheduler.
 // Remove this route after testing is complete.
 // ============================================================
 
@@ -2281,11 +2286,7 @@ app.post(
       const result =
         await deposit.approveRecharge(
           rechargeId,
-          {
-            adminId: "BUSINESS_MANAGER",
-            adminUsername:
-              "Kendrick Saint",
-          }
+          "BUSINESS_MANAGER"
         );
 
       return res.status(200).json({
@@ -2361,6 +2362,7 @@ app.post(
       const result =
         await deposit.rejectRecharge(
           rechargeId,
+          "BUSINESS_MANAGER",
           reason
         );
 

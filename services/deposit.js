@@ -1,35 +1,27 @@
 /**
  * SAINT CRYPTO
- * FILE: services/deposit.js
+ * FILE: services/signal.js
  *
- * FINAL MOBILE MONEY RECHARGE SERVICE
+ * FINAL DAILY SIGNAL SERVICE
  *
- * This service replaces the old USDT / TRON blockchain deposit flow.
+ * RULES
+ * ------------------------------------------------------------
+ * - Monday-Friday only.
+ * - One signal per Kampala date.
+ * - Scheduled at 21:00 Africa/Kampala.
+ * - Exactly 12 uppercase alphanumeric characters.
+ * - Fixed reward: UGX 20,000.
+ * - User must have qualifying locked trading capital.
+ * - One redemption per user per daily signal.
+ * - Redemption is PROCESSING for 7 minutes.
+ * - Server-side processor credits payout_balance_ugx.
+ * - Locked trading capital is never consumed by the payout.
  *
- * FLOW:
- *   User accepts Recharge T&C
- *          ↓
- *   User selects MTN or Airtel
- *          ↓
- *   Backend provides operator number
- *          ↓
- *   User sends Mobile Money manually
- *          ↓
- *   User submits amount + transaction ID
- *          ↓
- *   PENDING_ADMIN_REVIEW
- *          ↓
- *   Admin approves/rejects through Telegram
- *          ↓
- *   APPROVE -> ledger.creditRechargeToLedger()
- *   REJECT  -> no balance credit
- *
- * IMPORTANT:
- *   - This service does NOT verify blockchain transactions.
- *   - This service does NOT talk to Bybit.
- *   - This service does NOT modify user balances directly.
- *   - Only services/ledger.js changes locked trading capital.
- *   - Recharge approval is idempotent.
+ * TELEGRAM
+ * ------------------------------------------------------------
+ * This file owns the DAILY SIGNAL announcement.
+ * Telegram chat selection: TELEGRAM_SIGNAL_CHAT_ID -> TELEGRAM_ADMIN_CHAT_ID -> TELEGRAM_CHAT_ID.
+ * The old USD/USDT/20-minute signal message is intentionally gone.
  */
 
 "use strict";
@@ -38,6 +30,7 @@ const crypto = require("crypto");
 const {
   getFirestore,
   FieldValue,
+  Timestamp,
 } = require("firebase-admin/firestore");
 
 const ledger = require("./ledger");
@@ -48,55 +41,90 @@ try {
   firestore = getFirestore();
 } catch (error) {
   console.error(
-    "❌ Deposit service: Firestore unavailable:",
+    "❌ Signal service: Firestore unavailable:",
     error.message
   );
 }
 
 /* ============================================================
-   CONFIGURATION
+   CONFIG
    ============================================================ */
 
-const DEFAULT_MIN_RECHARGE_UGX = 1000;
-const DEFAULT_MAX_RECHARGE_UGX = 100000000;
-
-const DEFAULT_MTN_NUMBER =
-  process.env.RECHARGE_MTN_NUMBER ||
-  process.env.MTN_RECHARGE_NUMBER ||
-  "";
-
-const DEFAULT_AIRTEL_NUMBER =
-  process.env.RECHARGE_AIRTEL_NUMBER ||
-  process.env.AIRTEL_RECHARGE_NUMBER ||
-  "";
-
-const DEFAULT_MTN_NAME =
-  process.env.RECHARGE_MTN_NAME ||
-  "MTN Mobile Money";
-
-const DEFAULT_AIRTEL_NAME =
-  process.env.RECHARGE_AIRTEL_NAME ||
-  "Airtel Money";
-
-const RECHARGE_MINIMUM_UGX = Math.max(
+const SIGNAL_REWARD_UGX = Math.max(
   1,
-  Number(
-    process.env.RECHARGE_MINIMUM_UGX ??
-      process.env.DEPOSIT_MINIMUM_UGX ??
-      DEFAULT_MIN_RECHARGE_UGX
-  ) || DEFAULT_MIN_RECHARGE_UGX
+  Math.round(
+    Number(
+      process.env.SIGNAL_REWARD_UGX ??
+        process.env.SIGNAL_PAYOUT_UGX ??
+        20000
+    ) || 20000
+  )
 );
 
-const RECHARGE_MAXIMUM_UGX = Math.max(
-  RECHARGE_MINIMUM_UGX,
-  Number(
-    process.env.RECHARGE_MAXIMUM_UGX ??
-      process.env.DEPOSIT_MAXIMUM_UGX ??
-      DEFAULT_MAX_RECHARGE_UGX
-  ) || DEFAULT_MAX_RECHARGE_UGX
+const SIGNAL_PROCESSING_MINUTES = Math.max(
+  1,
+  Math.round(
+    Number(
+      process.env.SIGNAL_PROCESSING_MINUTES ?? 7
+    ) || 7
+  )
 );
 
-const COLLECTION = "recharges";
+// New architecture uses a long-lived daily code.
+// IMPORTANT: do not read the old SIGNAL_EXPIRY_MINUTES env var,
+// because the previous system used a 20-minute USDT signal expiry.
+// Optional new variable: SIGNAL_CODE_EXPIRY_MINUTES.
+const SIGNAL_EXPIRY_MINUTES = Math.max(
+  SIGNAL_PROCESSING_MINUTES + 1,
+  Math.round(
+    Number(
+      process.env.SIGNAL_CODE_EXPIRY_MINUTES ?? 1440
+    ) || 1440
+  )
+);
+
+const SIGNAL_TIMEZONE =
+  String(
+    process.env.SIGNAL_TIMEZONE ||
+      "Africa/Kampala"
+  ).trim();
+
+const SIGNAL_TIME =
+  String(
+    process.env.SIGNAL_TIME || "21:00"
+  ).trim();
+
+const MIN_LOCKED_CAPITAL_UGX = Math.max(
+  1,
+  Math.round(
+    Number(
+      process.env.SIGNAL_MIN_LOCKED_CAPITAL_UGX ?? 1
+    ) || 1
+  )
+);
+
+const SIGNAL_SYMBOL =
+  String(
+    process.env.SIGNAL_DEFAULT_SYMBOL ||
+      "XAUUSD"
+  ).trim().toUpperCase();
+
+const TELEGRAM_BOT_TOKEN =
+  String(
+    process.env.TELEGRAM_BOT_TOKEN || ""
+  ).trim();
+
+const TELEGRAM_SIGNAL_CHAT_ID =
+  String(
+    process.env.TELEGRAM_SIGNAL_CHAT_ID ||
+      process.env.TELEGRAM_ADMIN_CHAT_ID ||
+      process.env.TELEGRAM_CHAT_ID ||
+      ""
+  ).trim();
+
+const SIGNAL_COLLECTION = "signals";
+const DAILY_COLLECTION = "signal_daily";
+const REDEMPTION_COLLECTION = "signal_redemptions";
 const USERS_COLLECTION = "users";
 
 /* ============================================================
@@ -105,469 +133,1307 @@ const USERS_COLLECTION = "users";
 
 function requireFirestore() {
   if (!firestore) {
-    throw new Error("Database service is unavailable.");
+    throw new Error(
+      "Database service is unavailable."
+    );
   }
 }
 
 function validateUserId(userId) {
-  if (!userId || typeof userId !== "string") {
-    throw new Error("Invalid user account.");
+  if (
+    !userId ||
+    typeof userId !== "string"
+  ) {
+    throw new Error(
+      "Invalid user account."
+    );
   }
 
-  const value = userId.trim();
+  const uid = userId.trim();
 
-  if (!value) {
-    throw new Error("Invalid user account.");
+  if (!uid) {
+    throw new Error(
+      "Invalid user account."
+    );
   }
 
-  return value;
+  return uid;
 }
 
-function normalizeNetwork(network) {
-  const value = String(network || "")
+function normalizeSignalCode(code) {
+  const value = String(code || "")
     .trim()
     .toUpperCase();
 
-  if (value === "MTN") {
-    return "MTN";
-  }
-
-  if (value === "AIRTEL") {
-    return "AIRTEL";
-  }
-
-  throw new Error(
-    "Select MTN or Airtel Mobile Money."
-  );
-}
-
-function normalizeTransactionId(transactionId) {
-  const value = String(transactionId || "")
-    .trim();
-
-  if (!value) {
+  if (!/^[A-Z0-9]{12}$/.test(value)) {
     throw new Error(
-      "Mobile Money transaction ID is required."
-    );
-  }
-
-  /*
-   * Keep this reasonably strict without assuming a single
-   * telecom provider's exact reference format.
-   */
-  if (value.length < 4 || value.length > 100) {
-    throw new Error(
-      "Invalid Mobile Money transaction ID."
+      "Signal code must contain exactly 12 characters."
     );
   }
 
   return value;
 }
 
-function normalizeSenderName(senderName) {
-  const value = String(senderName || "")
-    .trim();
+function generateSignalCode() {
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
-  if (!value) {
-    throw new Error(
-      "Sender name is required."
-    );
+  let code = "";
+
+  for (let i = 0; i < 12; i += 1) {
+    code += alphabet[
+      crypto.randomInt(
+        0,
+        alphabet.length
+      )
+    ];
   }
 
-  if (value.length > 120) {
-    throw new Error(
-      "Sender name is too long."
-    );
-  }
-
-  return value;
+  return code;
 }
 
-function normalizeAmount(amountUgx) {
-  const amount = Math.round(
-    Number(amountUgx)
+function lockedCapitalOf(user) {
+  return Math.max(
+    0,
+    Math.round(
+      Number(
+        user?.locked_trading_capital_ugx ??
+          user?.locked_principal_ugx ??
+          0
+      ) || 0
+    )
   );
-
-  if (
-    !Number.isSafeInteger(amount) ||
-    amount <= 0
-  ) {
-    throw new Error(
-      "Enter a valid recharge amount."
-    );
-  }
-
-  if (amount < RECHARGE_MINIMUM_UGX) {
-    throw new Error(
-      `Minimum recharge is UGX ${RECHARGE_MINIMUM_UGX.toLocaleString()}.`
-    );
-  }
-
-  if (amount > RECHARGE_MAXIMUM_UGX) {
-    throw new Error(
-      `Maximum recharge is UGX ${RECHARGE_MAXIMUM_UGX.toLocaleString()}.`
-    );
-  }
-
-  return amount;
 }
 
 function isFrozen(user) {
   return (
     user?.is_frozen === true ||
-    String(user?.status || "").toUpperCase() === "FROZEN"
+    ["FROZEN", "PAUSED", "SUSPENDED"].includes(
+      String(user?.status || "")
+        .trim()
+        .toUpperCase()
+    )
   );
 }
 
-function safeNetworkConfig() {
+function getKampalaParts(date = new Date()) {
+  const formatter =
+    new Intl.DateTimeFormat(
+      "en-GB",
+      {
+        timeZone: SIGNAL_TIMEZONE,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        weekday: "short",
+        hourCycle: "h23",
+      }
+    );
+
+  const parts =
+    formatter.formatToParts(date);
+
+  const get = (type) =>
+    parts.find(
+      (part) => part.type === type
+    )?.value || "";
+
   return {
-    MTN: {
-      network: "MTN",
-      displayName: DEFAULT_MTN_NAME,
-      number: DEFAULT_MTN_NUMBER,
-    },
-    AIRTEL: {
-      network: "AIRTEL",
-      displayName: DEFAULT_AIRTEL_NAME,
-      number: DEFAULT_AIRTEL_NUMBER,
-    },
+    weekday: get("weekday"),
+    year: Number(get("year")),
+    month: Number(get("month")),
+    day: Number(get("day")),
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+    second: Number(get("second")),
+    date:
+      `${get("year")}-${get("month")}-${get("day")}`,
+    time:
+      `${get("hour")}:${get("minute")}`,
   };
 }
 
-/*
- * We store a deterministic fingerprint for a user's submitted
- * transaction reference. This helps detect accidental duplicate
- * submissions without treating different users' references as
- * the same transaction.
- */
-function transactionFingerprint(
-  userId,
-  transactionId
-) {
-  return crypto
-    .createHash("sha256")
-    .update(
-      `${userId}:${transactionId.toUpperCase()}`
+function isWeekday(parts) {
+  return [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+  ].includes(parts.weekday);
+}
+
+function timestampAfterMinutes(minutes) {
+  return Timestamp.fromDate(
+    new Date(
+      Date.now() +
+        Math.max(0, Number(minutes) || 0) *
+          60 *
+          1000
     )
-    .digest("hex");
-}
-
-/* ============================================================
-   RECHARGE CONFIG
- *
- * Flutter can call this before displaying the payment screen.
- * No private information is returned.
- * ============================================================ */
-
-function getRechargeConfig() {
-  const networks = safeNetworkConfig();
-
-  return {
-    success: true,
-    currency: "UGX",
-    feePercent: 0,
-    minimumAmountUgx:
-      RECHARGE_MINIMUM_UGX,
-    maximumAmountUgx:
-      RECHARGE_MAXIMUM_UGX,
-    networks: {
-      MTN: {
-        network: networks.MTN.network,
-        displayName: networks.MTN.displayName,
-        number: networks.MTN.number,
-      },
-      AIRTEL: {
-        network: networks.AIRTEL.network,
-        displayName:
-          networks.AIRTEL.displayName,
-        number: networks.AIRTEL.number,
-      },
-    },
-    instructions: [
-      "Accept the Recharge Terms and Conditions.",
-      "Choose MTN or Airtel Mobile Money.",
-      "Send the exact amount to the displayed operator number.",
-      "Keep your Mobile Money transaction ID.",
-      "Submit the amount and transaction ID for admin verification.",
-      "Your recharge is credited only after admin approval.",
-    ],
-  };
-}
-
-/* ============================================================
-   SUBMIT RECHARGE
- *
- * Creates a PENDING_ADMIN_REVIEW record.
- *
- * NO BALANCE IS CREDITED HERE.
- * ============================================================ */
-
-async function submitRecharge(
-  userId,
-  {
-    amountUgx,
-    amount,
-    network,
-    transactionId,
-    txid,
-    senderName,
-    sender,
-    termsAccepted,
-    acceptedTerms,
-  } = {}
-) {
-  requireFirestore();
-
-  const uid = validateUserId(userId);
-
-  /*
-   * Accept both the new names and common old/frontend names
-   * so the Flutter migration can be done without breaking
-   * immediately.
-   */
-  const finalAmount = normalizeAmount(
-    amountUgx ?? amount
   );
-
-  const finalNetwork =
-    normalizeNetwork(network);
-
-  const finalTransactionId =
-    normalizeTransactionId(
-      transactionId ?? txid
-    );
-
-  const finalSenderName =
-    normalizeSenderName(
-      senderName ?? sender
-    );
-
-  const accepted =
-    termsAccepted === true ||
-    acceptedTerms === true ||
-    String(termsAccepted)
-      .toLowerCase() === "true" ||
-    String(acceptedTerms)
-      .toLowerCase() === "true";
-
-  if (!accepted) {
-    throw new Error(
-      "You must accept the Recharge Terms and Conditions."
-    );
-  }
-
-  const userRef = firestore
-    .collection(USERS_COLLECTION)
-    .doc(uid);
-
-  const transactionHash =
-    transactionFingerprint(
-      uid,
-      finalTransactionId
-    );
-
-  const duplicateQuery = await firestore
-    .collection(COLLECTION)
-    .where(
-      "userId",
-      "==",
-      uid
-    )
-    .where(
-      "transactionFingerprint",
-      "==",
-      transactionHash
-    )
-    .limit(1)
-    .get();
-
-  if (!duplicateQuery.empty) {
-    const existing =
-      duplicateQuery.docs[0];
-
-    const existingData =
-      existing.data() || {};
-
-    return {
-      success: true,
-      duplicate: true,
-      rechargeId: existing.id,
-      status:
-        existingData.status ||
-        "PENDING_ADMIN_REVIEW",
-      message:
-        existingData.status === "APPROVED"
-          ? "This Mobile Money transaction has already been approved."
-          : existingData.status === "REJECTED"
-            ? "This Mobile Money transaction was already rejected."
-            : "This Mobile Money transaction is already under review.",
-    };
-  }
-
-  const userDoc = await userRef.get();
-
-  if (!userDoc.exists) {
-    throw new Error(
-      "Your account record could not be found."
-    );
-  }
-
-  const user = userDoc.data() || {};
-
-  if (isFrozen(user)) {
-    throw new Error(
-      "Your account is currently restricted. Please contact support."
-    );
-  }
-
-  const rechargeRef = firestore
-    .collection(COLLECTION)
-    .doc();
-
-  const rechargeId =
-    rechargeRef.id;
-
-  const now = FieldValue.serverTimestamp();
-
-  const rechargeRecord = {
-    rechargeId,
-
-    userId: uid,
-
-    amountUgx: finalAmount,
-    amount: finalAmount,
-    currency: "UGX",
-
-    network: finalNetwork,
-
-    transactionId:
-      finalTransactionId,
-
-    transactionFingerprint:
-      transactionHash,
-
-    senderName:
-      finalSenderName,
-
-    termsAccepted: true,
-    termsAcceptedAt: now,
-
-    status:
-      "PENDING_ADMIN_REVIEW",
-
-    creditedToLedger: false,
-
-    ledgerCreditAmountUgx: 0,
-
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  await rechargeRef.create(
-    rechargeRecord
-  );
-
-  return {
-    success: true,
-    duplicate: false,
-    rechargeId,
-    status:
-      "PENDING_ADMIN_REVIEW",
-    amountUgx:
-      finalAmount,
-    currency: "UGX",
-    network:
-      finalNetwork,
-    transactionId:
-      finalTransactionId,
-    message:
-      "Recharge submitted successfully. Waiting for admin verification.",
-  };
 }
 
-/* ============================================================
-   GET RECHARGE
- * ============================================================ */
-
-async function getRecharge(
-  userId,
-  rechargeId
-) {
-  requireFirestore();
-
-  const uid = validateUserId(userId);
+function toMillis(value) {
+  if (!value) return 0;
 
   if (
-    !rechargeId ||
-    typeof rechargeId !== "string"
+    typeof value.toMillis === "function"
   ) {
+    return value.toMillis();
+  }
+
+  if (
+    typeof value.toDate === "function"
+  ) {
+    return value.toDate().getTime();
+  }
+
+  const date =
+    new Date(value);
+
+  return Number.isNaN(
+    date.getTime()
+  )
+    ? 0
+    : date.getTime();
+}
+
+/* ============================================================
+   TELEGRAM
+   ============================================================ */
+
+function buildTelegramSignalMessage(
+  code,
+  createdAt = new Date()
+) {
+  const kampala =
+    getKampalaParts(createdAt);
+
+  return (
+    "🎟️ *SAINT CRYPTO DAILY SIGNAL*\n\n" +
+    `🕘 *Time:* \`${SIGNAL_TIME} EAT\`\n` +
+    "📅 *Schedule:* `Monday-Friday`\n" +
+    `💰 *Reward:* \`UGX ${SIGNAL_REWARD_UGX.toLocaleString()}\`\n` +
+    `🔑 *Signal Code:* \`${code}\`\n\n` +
+    `⏳ *Processing:* ${SIGNAL_PROCESSING_MINUTES} minutes\n` +
+    "👤 *Eligibility:* qualifying locked trading capital\n\n" +
+    "⚡ *Redeem the code in the SAINT CRYPTO app.*"
+  );
+}
+
+async function sendTelegramSignal(
+  code,
+  createdAt = new Date()
+) {
+  if (
+    !TELEGRAM_BOT_TOKEN ||
+    !TELEGRAM_SIGNAL_CHAT_ID
+  ) {
+    console.warn(
+      "⚠️ Daily signal created but Telegram credentials are not configured."
+    );
+
+    return false;
+  }
+
+  const message =
+    buildTelegramSignalMessage(
+      code,
+      createdAt
+    );
+
+  const url =
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+
+  try {
+    const response =
+      await fetch(
+        url,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            chat_id:
+              TELEGRAM_SIGNAL_CHAT_ID,
+            text: message,
+            parse_mode:
+              "Markdown",
+          }),
+        }
+      );
+
+    const data =
+      await response.json();
+
+    if (
+      response.ok &&
+      data.ok === true
+    ) {
+      console.log(
+        `📱 Daily signal ${code} sent to Telegram.`
+      );
+
+      return true;
+    }
+
+    console.error(
+      "❌ Daily signal Telegram error:",
+      data.description ||
+        "Unknown Telegram error"
+    );
+
+    return false;
+  } catch (error) {
+    console.error(
+      "❌ Daily signal Telegram request failed:",
+      error.message
+    );
+
+    return false;
+  }
+}
+
+/* ============================================================
+   CREATE SIGNAL
+   ============================================================ */
+
+async function createSignal({
+  session = "9:00 PM EAT",
+  force = false,
+  createdBy = "SCHEDULER",
+} = {}) {
+  requireFirestore();
+
+  const now = new Date();
+  const kampala =
+    getKampalaParts(now);
+
+  if (!force) {
+    if (!isWeekday(kampala)) {
+      throw new Error(
+        "Daily signals are generated Monday-Friday only."
+      );
+    }
+
+    if (
+      `${String(kampala.hour).padStart(2, "0")}:` +
+        `${String(kampala.minute).padStart(2, "0")}` !==
+      SIGNAL_TIME
+    ) {
+      throw new Error(
+        `Signal generation is scheduled for ${SIGNAL_TIME} EAT.`
+      );
+    }
+  }
+
+  const dailyRef =
+    firestore
+      .collection(DAILY_COLLECTION)
+      .doc(kampala.date);
+
+  const existingDaily =
+    await dailyRef.get();
+
+  if (
+    existingDaily.exists &&
+    existingDaily.data()?.signalCode
+  ) {
+    const existingCode =
+      existingDaily.data().signalCode;
+
+    const existingSignal =
+      await firestore
+        .collection(SIGNAL_COLLECTION)
+        .doc(existingCode)
+        .get();
+
+    if (existingSignal.exists) {
+      return {
+        success: true,
+        alreadyExists: true,
+        signal: {
+          code: existingCode,
+          ...existingSignal.data(),
+        },
+      };
+    }
+  }
+
+  let code = "";
+
+  for (
+    let attempt = 0;
+    attempt < 20;
+    attempt += 1
+  ) {
+    const candidate =
+      generateSignalCode();
+
+    const candidateRef =
+      firestore
+        .collection(SIGNAL_COLLECTION)
+        .doc(candidate);
+
+    const candidateDoc =
+      await candidateRef.get();
+
+    if (!candidateDoc.exists) {
+      code = candidate;
+      break;
+    }
+  }
+
+  if (!code) {
     throw new Error(
-      "Recharge ID is required."
+      "Unable to generate a unique signal code."
     );
   }
 
-  const ref = firestore
-    .collection(COLLECTION)
-    .doc(rechargeId);
+  const signalRef =
+    firestore
+      .collection(SIGNAL_COLLECTION)
+      .doc(code);
+
+  const expiresAt =
+    timestampAfterMinutes(
+      SIGNAL_EXPIRY_MINUTES
+    );
+
+  let created = false;
+
+  try {
+    await firestore.runTransaction(
+      async (transaction) => {
+        const dailyDoc =
+          await transaction.get(
+            dailyRef
+          );
+
+        if (
+          dailyDoc.exists &&
+          dailyDoc.data()?.signalCode
+        ) {
+          throw new Error(
+            "A daily signal has already been created."
+          );
+        }
+
+        transaction.create(
+          signalRef,
+          {
+            code,
+
+            rewardUgx:
+              SIGNAL_REWARD_UGX,
+
+            profit:
+              SIGNAL_REWARD_UGX,
+
+            currency:
+              "UGX",
+
+            symbol:
+              SIGNAL_SYMBOL,
+
+            session,
+
+            status:
+              "PROFIT_VERIFIED",
+
+            active: true,
+
+            isRedeemed: false,
+
+            date:
+              kampala.date,
+
+            timezone:
+              SIGNAL_TIMEZONE,
+
+            scheduledTime:
+              SIGNAL_TIME,
+
+            processingMinutes:
+              SIGNAL_PROCESSING_MINUTES,
+
+            expiryMinutes:
+              SIGNAL_EXPIRY_MINUTES,
+
+            createdBy,
+
+            createdAt:
+              FieldValue.serverTimestamp(),
+
+            created_at:
+              FieldValue.serverTimestamp(),
+
+            expiresAt,
+
+            expires_at:
+              expiresAt,
+
+            telegramSent:
+              false,
+
+            telegramSentAt:
+              null,
+
+            updatedAt:
+              FieldValue.serverTimestamp(),
+          }
+        );
+
+        transaction.create(
+          dailyRef,
+          {
+            date:
+              kampala.date,
+
+            signalCode:
+              code,
+
+            rewardUgx:
+              SIGNAL_REWARD_UGX,
+
+            timezone:
+              SIGNAL_TIMEZONE,
+
+            scheduledTime:
+              SIGNAL_TIME,
+
+            createdAt:
+              FieldValue.serverTimestamp(),
+          }
+        );
+
+        created = true;
+      }
+    );
+  } catch (error) {
+    if (
+      error.message ===
+      "A daily signal has already been created."
+    ) {
+      const retry =
+        await dailyRef.get();
+
+      if (
+        retry.exists &&
+        retry.data()?.signalCode
+      ) {
+        const existingCode =
+          retry.data().signalCode;
+
+        const existing =
+          await firestore
+            .collection(SIGNAL_COLLECTION)
+            .doc(existingCode)
+            .get();
+
+        if (existing.exists) {
+          return {
+            success: true,
+            alreadyExists: true,
+            signal: {
+              code: existingCode,
+              ...existing.data(),
+            },
+          };
+        }
+      }
+    }
+
+    throw error;
+  }
+
+  if (!created) {
+    throw new Error(
+      "Daily signal was not created."
+    );
+  }
+
+  const telegramSent =
+    await sendTelegramSignal(
+      code,
+      now
+    );
+
+  await signalRef.set(
+    {
+      telegramSent,
+      telegramSentAt:
+        telegramSent
+          ? FieldValue.serverTimestamp()
+          : null,
+      telegramDeliveryStatus:
+        telegramSent
+          ? "SENT"
+          : "FAILED",
+      updatedAt:
+        FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  console.log("");
+  console.log(
+    "============================================================"
+  );
+  console.log(
+    "🎟️ SAINT CRYPTO DAILY SIGNAL"
+  );
+  console.log(
+    "============================================================"
+  );
+  console.log(
+    `📅 Date: ${kampala.date}`
+  );
+  console.log(
+    `🕘 Time: ${SIGNAL_TIME} EAT`
+  );
+  console.log(
+    `🔑 Code: ${code}`
+  );
+  console.log(
+    `💰 Reward: UGX ${SIGNAL_REWARD_UGX.toLocaleString()}`
+  );
+  console.log(
+    `⏳ Processing: ${SIGNAL_PROCESSING_MINUTES} minutes`
+  );
+  console.log(
+    `📱 Telegram: ${telegramSent ? "SENT" : "FAILED"}`
+  );
+  console.log(
+    "============================================================"
+  );
+
+  return {
+    success: true,
+    alreadyExists: false,
+    telegramSent,
+    signal: {
+      code,
+      rewardUgx:
+        SIGNAL_REWARD_UGX,
+      currency: "UGX",
+      symbol:
+        SIGNAL_SYMBOL,
+      session,
+      status:
+        "PROFIT_VERIFIED",
+      active: true,
+      processingMinutes:
+        SIGNAL_PROCESSING_MINUTES,
+      expiryMinutes:
+        SIGNAL_EXPIRY_MINUTES,
+      createdAt:
+        now.toISOString(),
+    },
+  };
+}
+
+/* ============================================================
+   READ SIGNALS
+   ============================================================ */
+
+async function getActiveSignal() {
+  requireFirestore();
+
+  const snapshot =
+    await firestore
+      .collection(SIGNAL_COLLECTION)
+      .where(
+        "active",
+        "==",
+        true
+      )
+      .limit(20)
+      .get();
+
+  const now =
+    Date.now();
+
+  const active =
+    snapshot.docs
+      .map((doc) => ({
+        code: doc.id,
+        ...doc.data(),
+      }))
+      .filter((signal) => {
+        const expiry =
+          toMillis(
+            signal.expiresAt ||
+              signal.expires_at
+          );
+
+        return (
+          !expiry ||
+          expiry > now
+        );
+      })
+      .sort(
+        (a, b) =>
+          toMillis(
+            b.createdAt
+          ) -
+          toMillis(
+            a.createdAt
+          )
+      );
+
+  return {
+    success: true,
+    signal:
+      active[0] || null,
+    rewardUgx:
+      SIGNAL_REWARD_UGX,
+    currency:
+      "UGX",
+  };
+}
+
+async function getSignal(code) {
+  requireFirestore();
+
+  const clean =
+    normalizeSignalCode(code);
+
+  const snapshot =
+    await firestore
+      .collection(SIGNAL_COLLECTION)
+      .doc(clean)
+      .get();
+
+  if (!snapshot.exists) {
+    throw new Error(
+      "Signal code could not be found."
+    );
+  }
+
+  return {
+    success: true,
+    signal: {
+      code: snapshot.id,
+      ...snapshot.data(),
+    },
+  };
+}
+
+/* ============================================================
+   REDEEM
+   ============================================================ */
+
+async function redeemSignal(
+  userId,
+  body = {}
+) {
+  requireFirestore();
+
+  const uid =
+    validateUserId(userId);
+
+  const code =
+    normalizeSignalCode(
+      body.code ??
+        body.signalCode ??
+        body.signal_code
+    );
+
+  const signalRef =
+    firestore
+      .collection(SIGNAL_COLLECTION)
+      .doc(code);
+
+  const userRef =
+    firestore
+      .collection(USERS_COLLECTION)
+      .doc(uid);
+
+  const redemptionId =
+    `${uid}_${code}`;
+
+  const redemptionRef =
+    firestore
+      .collection(REDEMPTION_COLLECTION)
+      .doc(redemptionId);
+
+  let result = null;
+
+  await firestore.runTransaction(
+    async (transaction) => {
+      const signalDoc =
+        await transaction.get(
+          signalRef
+        );
+
+      if (!signalDoc.exists) {
+        throw new Error(
+          "Signal code is invalid or no longer available."
+        );
+      }
+
+      const signal =
+        signalDoc.data() || {};
+
+      const redemptionDoc =
+        await transaction.get(
+          redemptionRef
+        );
+
+      if (redemptionDoc.exists) {
+        const existing =
+          redemptionDoc.data() || {};
+
+        result = {
+          success: true,
+          alreadyRedeemed: true,
+          redemptionId,
+          signalCode: code,
+          status:
+            existing.status ||
+            "PROCESSING",
+          rewardUgx:
+            existing.rewardUgx ??
+            SIGNAL_REWARD_UGX,
+          currency: "UGX",
+          creditAt:
+            existing.creditAt ||
+            null,
+        };
+
+        return;
+      }
+
+      const userDoc =
+        await transaction.get(
+          userRef
+        );
+
+      if (!userDoc.exists) {
+        throw new Error(
+          "Your account record could not be found."
+        );
+      }
+
+      const user =
+        userDoc.data() || {};
+
+      if (isFrozen(user)) {
+        throw new Error(
+          "Your account is currently restricted."
+        );
+      }
+
+      if (
+        signal.active !== true ||
+        String(
+          signal.status || ""
+        ).toUpperCase() !==
+          "PROFIT_VERIFIED"
+      ) {
+        throw new Error(
+          "This signal is not available for redemption."
+        );
+      }
+
+      const expiry =
+        toMillis(
+          signal.expiresAt ||
+            signal.expires_at
+        );
+
+      if (
+        expiry &&
+        expiry <= Date.now()
+      ) {
+        throw new Error(
+          "This signal has expired."
+        );
+      }
+
+      const lockedCapital =
+        lockedCapitalOf(user);
+
+      if (
+        lockedCapital <
+        MIN_LOCKED_CAPITAL_UGX
+      ) {
+        throw new Error(
+          `Qualifying locked trading capital is required. Minimum: UGX ${MIN_LOCKED_CAPITAL_UGX.toLocaleString()}.`
+        );
+      }
+
+      const creditAt =
+        timestampAfterMinutes(
+          SIGNAL_PROCESSING_MINUTES
+        );
+
+      transaction.create(
+        redemptionRef,
+        {
+          redemptionId,
+
+          userId:
+            uid,
+
+          signalCode:
+            code,
+
+          code,
+
+          rewardUgx:
+            SIGNAL_REWARD_UGX,
+
+          currency:
+            "UGX",
+
+          lockedTradingCapitalUgx:
+            lockedCapital,
+
+          status:
+            "PROCESSING",
+
+          creditedToLedger:
+            false,
+
+          creditAt,
+
+          processingMinutes:
+            SIGNAL_PROCESSING_MINUTES,
+
+          processingStartedAt:
+            FieldValue.serverTimestamp(),
+
+          createdAt:
+            FieldValue.serverTimestamp(),
+
+          updatedAt:
+            FieldValue.serverTimestamp(),
+        }
+      );
+
+      result = {
+        success: true,
+        alreadyRedeemed: false,
+        redemptionId,
+        signalCode: code,
+        status:
+          "PROCESSING",
+        rewardUgx:
+          SIGNAL_REWARD_UGX,
+        currency:
+          "UGX",
+        processingMinutes:
+          SIGNAL_PROCESSING_MINUTES,
+        creditAt,
+      };
+    }
+  );
+
+  return result;
+}
+
+/* ============================================================
+   PAYOUT PROCESSOR
+   ============================================================ */
+
+async function processSignalRedemption(
+  redemptionId
+) {
+  requireFirestore();
+
+  if (
+    !redemptionId ||
+    typeof redemptionId !== "string"
+  ) {
+    throw new Error(
+      "Redemption ID is required."
+    );
+  }
+
+  const ref =
+    firestore
+      .collection(
+        REDEMPTION_COLLECTION
+      )
+      .doc(redemptionId);
 
   const snapshot =
     await ref.get();
 
   if (!snapshot.exists) {
     throw new Error(
-      "Recharge record could not be found."
+      "Signal redemption could not be found."
     );
   }
 
-  const data =
+  const redemption =
     snapshot.data() || {};
 
-  if (data.userId !== uid) {
+  if (
+    redemption.status ===
+      "CREDITED" &&
+    redemption.creditedToLedger ===
+      true
+  ) {
+    return {
+      success: true,
+      alreadyCredited: true,
+      redemptionId,
+      status:
+        "CREDITED",
+      amountUgx:
+        redemption.creditedAmountUgx ??
+        redemption.rewardUgx ??
+        SIGNAL_REWARD_UGX,
+    };
+  }
+
+  if (
+    redemption.status !==
+    "PROCESSING"
+  ) {
     throw new Error(
-      "You are not allowed to view this recharge."
+      `Redemption cannot be processed from status ${redemption.status || "UNKNOWN"}.`
+    );
+  }
+
+  const creditAt =
+    toMillis(
+      redemption.creditAt
+    );
+
+  if (
+    creditAt &&
+    creditAt > Date.now()
+  ) {
+    return {
+      success: true,
+      ready: false,
+      redemptionId,
+      status:
+        "PROCESSING",
+      creditAt:
+        redemption.creditAt,
+    };
+  }
+
+  const amountUgx =
+    Math.round(
+      Number(
+        redemption.rewardUgx ??
+          SIGNAL_REWARD_UGX
+      ) || SIGNAL_REWARD_UGX
+    );
+
+  const result =
+    await ledger.creditSignalPayoutToLedger(
+      {
+        redemptionId,
+        userId:
+          redemption.userId,
+        amountUgx,
+        record: {
+          signalCode:
+            redemption.signalCode ||
+            redemption.code ||
+            null,
+          processor:
+            "SIGNAL_PAYOUT_PROCESSOR",
+        },
+      }
+    );
+
+  await ref.set(
+    {
+      status:
+        "CREDITED",
+      creditedToLedger:
+        true,
+      creditedAmountUgx:
+        amountUgx,
+      creditedAt:
+        FieldValue.serverTimestamp(),
+      updatedAt:
+        FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return {
+    success: true,
+    ready: true,
+    alreadyCredited:
+      Boolean(
+        result?.alreadyCredited
+      ),
+    redemptionId,
+    userId:
+      redemption.userId,
+    status:
+      "CREDITED",
+    amountUgx,
+  };
+}
+
+async function processDueSignalRedemptions(
+  limit = 100
+) {
+  requireFirestore();
+
+  const count =
+    Math.min(
+      Math.max(
+        Number.parseInt(
+          limit,
+          10
+        ) || 100,
+        1
+      ),
+      250
+    );
+
+  const now =
+    Timestamp.now();
+
+  /*
+   * IMPORTANT:
+   * Query only by creditAt so this lookup uses a single-field
+   * Firestore index. Do not combine status + creditAt here because
+   * that requires a composite index.
+   *
+   * We filter the redemption status in memory before processing.
+   * processSignalRedemption() performs the final status/idempotency
+   * checks inside Firestore, so duplicate processing remains safe.
+   */
+  const snapshot =
+    await firestore
+      .collection(
+        REDEMPTION_COLLECTION
+      )
+      .where(
+        "creditAt",
+        "<=",
+        now
+      )
+      .limit(count)
+      .get();
+
+  const dueDocs =
+    snapshot.docs.filter((doc) => {
+      const data =
+        doc.data() || {};
+
+      return (
+        String(data.status || "").toUpperCase() ===
+        "PROCESSING"
+      );
+    });
+
+  const results = [];
+
+  for (const doc of dueDocs) {
+    try {
+      results.push(
+        await processSignalRedemption(
+          doc.id
+        )
+      );
+    } catch (error) {
+      console.error(
+        `❌ Signal payout ${doc.id}:`,
+        error.message
+      );
+
+      results.push({
+        success: false,
+        redemptionId:
+          doc.id,
+        error:
+          error.message,
+      });
+    }
+  }
+
+  return {
+    success: true,
+    processed:
+      results.length,
+    results,
+  };
+}
+
+let payoutProcessorTimer =
+  null;
+
+function startSignalPayoutProcessor({
+  intervalMs = 15000,
+} = {}) {
+  if (payoutProcessorTimer) {
+    return {
+      success: true,
+      alreadyRunning: true,
+    };
+  }
+
+  const interval =
+    Math.max(
+      5000,
+      Number(intervalMs) ||
+        15000
+    );
+
+  const run =
+    async () => {
+      try {
+        await processDueSignalRedemptions(
+          100
+        );
+      } catch (error) {
+        console.error(
+          "❌ Signal payout processor:",
+          error.message
+        );
+      }
+    };
+
+  run();
+
+  payoutProcessorTimer =
+    setInterval(
+      run,
+      interval
+    );
+
+  if (
+    typeof payoutProcessorTimer.unref ===
+    "function"
+  ) {
+    payoutProcessorTimer.unref();
+  }
+
+  console.log(
+    `✅ Signal payout processor started (${interval}ms interval).`
+  );
+
+  return {
+    success: true,
+    alreadyRunning: false,
+    intervalMs:
+      interval,
+  };
+}
+
+function stopSignalPayoutProcessor() {
+  if (!payoutProcessorTimer) {
+    return {
+      success: true,
+      alreadyStopped: true,
+    };
+  }
+
+  clearInterval(
+    payoutProcessorTimer
+  );
+
+  payoutProcessorTimer = null;
+
+  return {
+    success: true,
+    stopped: true,
+  };
+}
+
+/* ============================================================
+   REDEMPTION READS
+   ============================================================ */
+
+async function getRedemption(
+  userId,
+  redemptionId
+) {
+  requireFirestore();
+
+  const uid =
+    validateUserId(userId);
+
+  if (
+    !redemptionId ||
+    typeof redemptionId !== "string"
+  ) {
+    throw new Error(
+      "Redemption ID is required."
+    );
+  }
+
+  const snapshot =
+    await firestore
+      .collection(
+        REDEMPTION_COLLECTION
+      )
+      .doc(redemptionId)
+      .get();
+
+  if (!snapshot.exists) {
+    throw new Error(
+      "Signal redemption could not be found."
+    );
+  }
+
+  const redemption =
+    snapshot.data() || {};
+
+  if (
+    redemption.userId !== uid
+  ) {
+    throw new Error(
+      "You are not allowed to view this redemption."
     );
   }
 
   return {
     success: true,
-    recharge: {
-      rechargeId:
+    redemption: {
+      redemptionId:
         snapshot.id,
-      ...data,
+      ...redemption,
     },
   };
 }
 
-/* ============================================================
-   USER RECHARGE HISTORY
- * ============================================================ */
-
-async function getRechargeHistory(
+async function getRedemptionHistory(
   userId,
-  limit = 30
+  limit = 50
 ) {
   requireFirestore();
 
-  const uid = validateUserId(userId);
+  const uid =
+    validateUserId(userId);
 
-  let count =
-    Number.parseInt(
-      limit,
-      10
+  const count =
+    Math.min(
+      Math.max(
+        Number.parseInt(
+          limit,
+          10
+        ) || 50,
+        1
+      ),
+      100
     );
-
-  if (!Number.isFinite(count)) {
-    count = 30;
-  }
-
-  count = Math.min(
-    Math.max(count, 1),
-    100
-  );
 
   const snapshot =
     await firestore
-      .collection(COLLECTION)
+      .collection(
+        REDEMPTION_COLLECTION
+      )
       .where(
         "userId",
         "==",
@@ -579,368 +1445,95 @@ async function getRechargeHistory(
   const records =
     snapshot.docs.map(
       (doc) => ({
-        rechargeId:
+        redemptionId:
           doc.id,
         ...doc.data(),
       })
     );
 
   records.sort(
-    (a, b) => {
-      const aTime =
-        a.createdAt
-          ?.toMillis?.() || 0;
-
-      const bTime =
+    (a, b) =>
+      toMillis(
         b.createdAt
-          ?.toMillis?.() || 0;
-
-      return bTime - aTime;
-    }
-  );
-
-  return {
-    success: true,
-    recharges: records,
-  };
-}
-
-/* ============================================================
-   ADMIN: GET PENDING RECHARGES
- *
- * This is intended for the Telegram/admin layer.
- * It does not expose this endpoint by itself; routes decide
- * who may call it.
- * ============================================================ */
-
-async function getPendingRecharges(
-  limit = 50
-) {
-  requireFirestore();
-
-  let count =
-    Number.parseInt(
-      limit,
-      10
-    );
-
-  if (!Number.isFinite(count)) {
-    count = 50;
-  }
-
-  count = Math.min(
-    Math.max(count, 1),
-    100
-  );
-
-  const snapshot =
-    await firestore
-      .collection(COLLECTION)
-      .where(
-        "status",
-        "==",
-        "PENDING_ADMIN_REVIEW"
+      ) -
+      toMillis(
+        a.createdAt
       )
-      .limit(count)
-      .get();
-
-  const records =
-    snapshot.docs.map(
-      (doc) => ({
-        rechargeId:
-          doc.id,
-        ...doc.data(),
-      })
-    );
-
-  records.sort(
-    (a, b) => {
-      const aTime =
-        a.createdAt
-          ?.toMillis?.() || 0;
-
-      const bTime =
-        b.createdAt
-          ?.toMillis?.() || 0;
-
-      return aTime - bTime;
-    }
   );
 
   return {
     success: true,
-    recharges: records,
+    redemptions:
+      records,
   };
 }
 
-/* ============================================================
-   ADMIN: APPROVE RECHARGE
- *
- * The ledger performs the actual balance mutation.
- *
- * This function is intentionally safe to call twice.
- * ============================================================ */
-
-async function approveRecharge(
-  rechargeId,
-  adminId = null
-) {
-  requireFirestore();
-
-  if (
-    !rechargeId ||
-    typeof rechargeId !== "string"
-  ) {
-    throw new Error(
-      "Recharge ID is required."
-    );
-  }
-
-  const rechargeRef = firestore
-    .collection(COLLECTION)
-    .doc(rechargeId);
-
-  const rechargeDoc =
-    await rechargeRef.get();
-
-  if (!rechargeDoc.exists) {
-    throw new Error(
-      "Recharge record could not be found."
-    );
-  }
-
-  const recharge =
-    rechargeDoc.data() || {};
-
-  /*
-   * Already approved and credited:
-   * return success without touching balance again.
-   */
-  if (
-    recharge.status === "APPROVED" &&
-    recharge.creditedToLedger === true
-  ) {
-    return {
-      success: true,
-      alreadyApproved: true,
-      rechargeId,
-      userId:
-        recharge.userId,
-      amountUgx:
-        recharge.amountUgx,
-      status: "APPROVED",
-    };
-  }
-
-  if (
-    recharge.status !==
-    "PENDING_ADMIN_REVIEW"
-  ) {
-    throw new Error(
-      `Recharge cannot be approved from status ${
-        recharge.status || "UNKNOWN"
-      }.`
-    );
-  }
-
-  const result =
-    await ledger.creditRechargeToLedger(
-      rechargeId,
-      recharge.userId,
-      recharge.amountUgx,
-      {
-        adminId:
-          adminId || null,
-        approvedBy:
-          adminId || null,
-        approvedFrom:
-          "MOBILE_MONEY_ADMIN",
-      }
-    );
-
+async function getStatus() {
   return {
     success: true,
-    alreadyApproved:
-      result.alreadyCredited,
-    rechargeId,
-    userId:
-      recharge.userId,
-    amountUgx:
-      recharge.amountUgx,
-    status:
-      "APPROVED",
-  };
-}
-
-/* ============================================================
-   ADMIN: REJECT RECHARGE
- *
- * Rejection NEVER changes the ledger balance because no
- * balance was credited during submission.
- *
- * Idempotent.
- * ============================================================ */
-
-async function rejectRecharge(
-  rechargeId,
-  adminId = null,
-  reason = ""
-) {
-  requireFirestore();
-
-  if (
-    !rechargeId ||
-    typeof rechargeId !== "string"
-  ) {
-    throw new Error(
-      "Recharge ID is required."
-    );
-  }
-
-  const rechargeRef = firestore
-    .collection(COLLECTION)
-    .doc(rechargeId);
-
-  let alreadyRejected = false;
-
-  await firestore.runTransaction(
-    async (transaction) => {
-      const rechargeDoc =
-        await transaction.get(
-          rechargeRef
-        );
-
-      if (!rechargeDoc.exists) {
-        throw new Error(
-          "Recharge record could not be found."
-        );
-      }
-
-      const recharge =
-        rechargeDoc.data() || {};
-
-      if (
-        recharge.status ===
-        "REJECTED"
-      ) {
-        alreadyRejected = true;
-        return;
-      }
-
-      if (
-        recharge.status ===
-        "APPROVED"
-      ) {
-        throw new Error(
-          "An approved recharge cannot be rejected."
-        );
-      }
-
-      if (
-        recharge.status !==
-        "PENDING_ADMIN_REVIEW"
-      ) {
-        throw new Error(
-          `Recharge cannot be rejected from status ${
-            recharge.status || "UNKNOWN"
-          }.`
-        );
-      }
-
-      transaction.set(
-        rechargeRef,
-        {
-          status: "REJECTED",
-          rejectionReason:
-            String(reason || "")
-              .trim()
-              .slice(0, 500) || null,
-          rejectedBy:
-            adminId || null,
-          rejectedAt:
-            FieldValue.serverTimestamp(),
-          updatedAt:
-            FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
-    }
-  );
-
-  return {
-    success: true,
-    alreadyRejected,
-    rechargeId,
-    status: "REJECTED",
-  };
-}
-
-/* ============================================================
-   ADMIN: GET RECHARGE BY ID
- * ============================================================ */
-
-async function getRechargeForAdmin(
-  rechargeId
-) {
-  requireFirestore();
-
-  if (
-    !rechargeId ||
-    typeof rechargeId !== "string"
-  ) {
-    throw new Error(
-      "Recharge ID is required."
-    );
-  }
-
-  const ref =
-    firestore
-      .collection(COLLECTION)
-      .doc(rechargeId);
-
-  const snapshot =
-    await ref.get();
-
-  if (!snapshot.exists) {
-    throw new Error(
-      "Recharge record could not be found."
-    );
-  }
-
-  return {
-    success: true,
-    recharge: {
-      rechargeId:
-        snapshot.id,
-      ...snapshot.data(),
-    },
+    currency:
+      "UGX",
+    rewardUgx:
+      SIGNAL_REWARD_UGX,
+    processingMinutes:
+      SIGNAL_PROCESSING_MINUTES,
+    expiryMinutes:
+      SIGNAL_EXPIRY_MINUTES,
+    signalTime:
+      SIGNAL_TIME,
+    timezone:
+      SIGNAL_TIMEZONE,
+    weekdaysOnly:
+      true,
+    minimumLockedCapitalUgx:
+      MIN_LOCKED_CAPITAL_UGX,
+    processorRunning:
+      Boolean(
+        payoutProcessorTimer
+      ),
+    telegramConfigured:
+      Boolean(
+        TELEGRAM_BOT_TOKEN &&
+        TELEGRAM_SIGNAL_CHAT_ID
+      ),
   };
 }
 
 /* ============================================================
    EXPORTS
- * ============================================================ */
+   ============================================================ */
 
 module.exports = {
-  getRechargeConfig,
+  SIGNAL_REWARD_UGX,
+  SIGNAL_PROCESSING_MINUTES,
+  SIGNAL_EXPIRY_MINUTES,
+  SIGNAL_TIMEZONE,
+  SIGNAL_TIME,
+  MIN_LOCKED_CAPITAL_UGX,
 
-  submitRecharge,
+  generateSignalCode,
+  normalizeSignalCode,
 
-  getRecharge,
+  getKampalaParts,
+  isWeekday,
 
-  getRechargeHistory,
+  buildTelegramSignalMessage,
+  sendTelegramSignal,
 
-  getPendingRecharges,
+  createSignal,
+  getActiveSignal,
+  getSignal,
 
-  getRechargeForAdmin,
+  redeemSignal,
 
-  approveRecharge,
+  processSignalRedemption,
+  processDueSignalRedemptions,
 
-  rejectRecharge,
+  startSignalPayoutProcessor,
+  stopSignalPayoutProcessor,
 
-  normalizeNetwork,
+  getRedemption,
+  getRedemptionHistory,
 
-  normalizeTransactionId,
-
-  normalizeAmount,
+  getStatus,
 };

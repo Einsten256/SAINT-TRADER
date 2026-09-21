@@ -4,28 +4,17 @@
  *
  * FINAL UGX MOBILE MONEY WITHDRAWAL SERVICE
  *
- * BUSINESS RULES
- * ------------------------------------------------------------
- * 1. Withdrawals are made from payout_balance_ugx only.
- * 2. Locked trading capital can NEVER be withdrawn.
- * 3. Network is MTN or AIRTEL.
- * 4. Recipient identity:
- *      - recipientName
- *      - mobileNumber
- *      - network
- * 5. Withdrawal fee is 5%.
- * 6. Gross amount is reserved immediately.
- * 7. Admin approves/rejects through Telegram.
- * 8. Approval means the admin is confirming manual payment.
- * 9. After the admin manually pays the saved number,
- *    withdrawal becomes DISBURSED.
- * 10. Rejection restores the FULL gross amount.
- * 11. No USDT.
- * 12. No TRON.
- * 13. No wallet address.
- * 14. No blockchain TXID verification.
- * 15. All money movements are delegated to services/ledger.js.
- * 16. Operations are idempotent.
+ * COMPATIBILITY FIX
+ * -----------------
+ * Adds requestWithdrawal(userId, body), including server-side
+ * six-digit Fund Password verification, for the current
+ * services/routes/withdrawal.js contract.
+ *
+ * Existing Mobile Money, 5% fee, ledger reservation,
+ * MTN/Airtel and Telegram-admin review behavior is preserved.
+ *
+ * Destination:
+ *   services/withdrawal.js
  */
 
 "use strict";
@@ -34,6 +23,32 @@ const {
   getFirestore,
   FieldValue,
 } = require("firebase-admin/firestore");
+
+/*
+ * Fund Password verification
+ * --------------------------
+ * Canonical SAINT CRYPTO Fund Password storage is:
+ *   bcrypt(sha256(pin))
+ *
+ * Legacy raw-bcrypt and legacy plaintext/sha256 values are also
+ * supported so existing user accounts are not broken.
+ */
+let bcrypt = null;
+
+try {
+  bcrypt = require("bcrypt");
+} catch (_) {
+  try {
+    bcrypt = require("bcryptjs");
+  } catch (error) {
+    console.error(
+      "❌ Withdrawal service: bcrypt is unavailable:",
+      error.message
+    );
+  }
+}
+
+const crypto = require("crypto");
 
 const ledger = require("./ledger");
 
@@ -265,6 +280,89 @@ function isFrozen(user) {
     String(
       user?.status || ""
     ).toUpperCase() === "FROZEN"
+  );
+}
+
+/* ============================================================
+   FUND PASSWORD
+   ============================================================ */
+
+function sha256(value) {
+  return crypto
+    .createHash("sha256")
+    .update(String(value ?? "").trim())
+    .digest("hex");
+}
+
+async function verifyFundPassword(
+  user,
+  suppliedPassword
+) {
+  const supplied =
+    String(suppliedPassword ?? "").trim();
+
+  if (!/^\d{6}$/.test(supplied)) {
+    return false;
+  }
+
+  if (!bcrypt) {
+    throw new Error(
+      "Secure Fund Password verification is temporarily unavailable."
+    );
+  }
+
+  const storedHash =
+    String(user?.fundPasswordHash ?? "").trim();
+
+  if (storedHash) {
+    // Canonical: bcrypt(sha256(pin))
+    try {
+      if (
+        await bcrypt.compare(
+          sha256(supplied),
+          storedHash
+        )
+      ) {
+        return true;
+      }
+    } catch (_) {}
+
+    // Legacy: bcrypt(pin)
+    try {
+      if (
+        await bcrypt.compare(
+          supplied,
+          storedHash
+        )
+      ) {
+        return true;
+      }
+    } catch (_) {}
+  }
+
+  // Legacy plaintext/sha256 compatibility.
+  if (
+    user?.fundPassword !== undefined &&
+    user?.fundPassword !== null
+  ) {
+    const legacy =
+      String(user.fundPassword).trim();
+
+    if (
+      legacy === supplied ||
+      legacy === sha256(supplied)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasFundPassword(user) {
+  return Boolean(
+    user?.hasFundPassword === true ||
+    user?.fundPasswordHash
   );
 }
 
@@ -537,6 +635,170 @@ async function resolveWithdrawalProfile(
  * On disbursement:
  *   nothing more is deducted.
  * ============================================================ */
+
+/* ============================================================
+   REQUEST WITHDRAWAL
+   ============================================================
+ *
+ * Contract used by:
+ *   services/routes/withdrawal.js
+ *
+ * Body accepts:
+ *   amount
+ *   amountUgx
+ *   fundPassword
+ *   password
+ *   fundPin
+ *
+ * Fund Password is verified server-side BEFORE any money
+ * reservation is attempted.
+ *
+ * The actual balance movement remains owned by
+ * services/ledger.js through reserveWithdrawal().
+ * ============================================================ */
+
+async function requestWithdrawal(
+  userId,
+  {
+    amount,
+    amountUgx,
+    fundPassword,
+    password,
+    fundPin,
+    recipientName,
+    network,
+    mobileNumber,
+    note,
+  } = {}
+) {
+  requireFirestore();
+
+  const uid = validateUserId(userId);
+
+  const rawAmount =
+    amountUgx ?? amount;
+
+  const suppliedFundPassword =
+    String(
+      fundPassword ??
+        password ??
+        fundPin ??
+        ""
+    ).trim();
+
+  if (!/^\d{6}$/.test(suppliedFundPassword)) {
+    return {
+      success: false,
+      code: "INVALID_FUND_PASSWORD",
+      message:
+        "Please enter your 6-digit Fund Password.",
+      httpStatus: 400,
+    };
+  }
+
+  const userRef = firestore
+    .collection(USERS_COLLECTION)
+    .doc(uid);
+
+  const userDoc =
+    await userRef.get();
+
+  if (!userDoc.exists) {
+    return {
+      success: false,
+      code: "USER_NOT_FOUND",
+      message:
+        "Your account record could not be found.",
+      httpStatus: 404,
+    };
+  }
+
+  const user =
+    userDoc.data() || {};
+
+  if (isFrozen(user)) {
+    return {
+      success: false,
+      code: "ACCOUNT_RESTRICTED",
+      message:
+        "Your account is currently restricted. Please contact SAINT CRYPTO Support.",
+      httpStatus: 403,
+    };
+  }
+
+  if (!hasFundPassword(user)) {
+    return {
+      success: false,
+      code: "FUND_PASSWORD_NOT_SET",
+      message:
+        "You have not created a Fund Password yet. Please create one in Profile → Security.",
+      httpStatus: 400,
+    };
+  }
+
+  let passwordValid = false;
+
+  try {
+    passwordValid =
+      await verifyFundPassword(
+        user,
+        suppliedFundPassword
+      );
+  } catch (error) {
+    console.error(
+      "[withdrawal] Fund Password verification failed:",
+      error?.message || error
+    );
+
+    return {
+      success: false,
+      code: "FUND_PASSWORD_SERVICE_UNAVAILABLE",
+      message:
+        "Secure Fund Password verification is temporarily unavailable. Please try again shortly.",
+      httpStatus: 503,
+    };
+  }
+
+  if (!passwordValid) {
+    return {
+      success: false,
+      code: "WRONG_FUND_PASSWORD",
+      message:
+        "Incorrect Fund Password. Please check it and try again.",
+      httpStatus: 400,
+    };
+  }
+
+  const calculation =
+    calculateWithdrawal(rawAmount);
+
+  /*
+   * When identity fields are omitted, reserveWithdrawal()
+   * resolves the user's saved Mobile Money profile.
+   */
+  const result =
+    await reserveWithdrawal({
+      userId: uid,
+      amountUgx:
+        calculation.grossAmountUgx,
+      recipientName,
+      network,
+      mobileNumber,
+      note,
+    });
+
+  return {
+    success: true,
+    code: "WITHDRAWAL_UNDER_REVIEW",
+    status:
+      result?.status ||
+      "UNDER_REVIEW",
+    message:
+      "Your withdrawal request was received and is now under review.",
+    httpStatus: 200,
+    ...result,
+  };
+}
 
 async function reserveWithdrawal({
   userId,
@@ -1368,6 +1630,7 @@ module.exports = {
   getWithdrawalProfile,
   saveWithdrawalProfile,
 
+  requestWithdrawal,
   reserveWithdrawal,
 
   getWithdrawal,
