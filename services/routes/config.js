@@ -91,7 +91,7 @@ router.get("/recharge", (req, res) => {
 
     return res.json({
       success: true,
-      recharge: publicConfig.recharge,
+      recharge: publicConfig.financial.recharge,
     });
   } catch (error) {
     console.error("[config route] recharge", error);
@@ -123,8 +123,7 @@ router.get("/withdrawal", (req, res) => {
     return res.status(500).json({
       success: false,
       error: "WITHDRAWAL_CONFIG_LOAD_FAILED",
-      message:
-        "Could not load withdrawal configuration.",
+      message: "Could not load withdrawal configuration.",
     });
   }
 });
