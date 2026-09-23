@@ -549,8 +549,8 @@ function getPublicConfig() {
         enabled:
           ENABLE_MOBILE_MONEY_RECHARGE,
 
+        // Recharge currently supports Airtel Money only.
         networks: [
-          "MTN",
           "AIRTEL",
         ],
 
@@ -560,11 +560,7 @@ function getPublicConfig() {
         maximumUgx:
           RECHARGE_MAXIMUM_UGX,
 
-        // These are intentionally public because the app needs to display
-        // the operator numbers to the user after accepting recharge terms.
-        mtnNumber:
-          RECHARGE_MTN_NUMBER,
-
+        // Public because the app must display the payment number.
         airtelNumber:
           RECHARGE_AIRTEL_NUMBER,
 
@@ -671,9 +667,6 @@ function getDiagnostics() {
       recharge: {
         enabled:
           ENABLE_MOBILE_MONEY_RECHARGE,
-
-        mtnConfigured:
-          Boolean(RECHARGE_MTN_NUMBER),
 
         airtelConfigured:
           Boolean(RECHARGE_AIRTEL_NUMBER),
@@ -790,11 +783,10 @@ function validateConfig() {
 
   if (
     ENABLE_MOBILE_MONEY_RECHARGE &&
-    !RECHARGE_MTN_NUMBER &&
     !RECHARGE_AIRTEL_NUMBER
   ) {
     warnings.push(
-      "Mobile Money recharge is enabled but no MTN/Airtel recharge number is configured."
+      "Airtel Mobile Money recharge is enabled but no Airtel recharge number is configured."
     );
   }
 
