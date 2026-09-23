@@ -267,38 +267,88 @@ async function sendRechargeForReview(
     rechargeIdOf(recharge);
 
   if (!rechargeId) {
+    console.error(
+      "[telegram recharge] Cannot send review message: recharge ID is missing."
+    );
+
     return {
       sent: false,
       reason: "RECHARGE_ID_MISSING",
     };
   }
 
-  if (!bot || !getChatId()) {
+  const chatId = getChatId();
+
+  // Diagnostic logging: show exactly why Telegram delivery is blocked.
+  console.log(
+    "[telegram recharge] delivery check:",
+    JSON.stringify({
+      hasBot: Boolean(bot),
+      hasChatId: Boolean(chatId),
+      chatIdConfigured: Boolean(chatId),
+      rechargeId,
+      status: recharge.status || "UNKNOWN",
+    })
+  );
+
+  if (!bot || !chatId) {
+    console.error(
+      "[telegram recharge] BLOCKED: Telegram bot or chat ID is not configured."
+    );
+
     return {
       sent: false,
       reason: "TELEGRAM_NOT_CONFIGURED",
     };
   }
 
-  const message =
-    await bot.sendMessage(
-      getChatId(),
-      rechargeText(recharge),
-      {
-        parse_mode: "HTML",
-        disable_web_page_preview: true,
-        reply_markup:
-          rechargeKeyboard(rechargeId),
-      }
+  try {
+    const message =
+      await bot.sendMessage(
+        chatId,
+        rechargeText(recharge),
+        {
+          parse_mode: "HTML",
+          disable_web_page_preview: true,
+          reply_markup:
+            rechargeKeyboard(rechargeId),
+        }
+      );
+
+    console.log(
+      "[telegram recharge] Telegram send successful:",
+      JSON.stringify({
+        sent: true,
+        messageId:
+          message?.message_id || null,
+        chatId,
+        rechargeId,
+      })
     );
 
-  return {
-    sent: true,
-    messageId:
-      message?.message_id || null,
-    chatId: getChatId(),
-    rechargeId,
-  };
+    return {
+      sent: true,
+      messageId:
+        message?.message_id || null,
+      chatId,
+      rechargeId,
+    };
+  } catch (error) {
+    console.error(
+      "[telegram recharge] Telegram sendMessage FAILED:",
+      error?.stack || error
+    );
+
+    return {
+      sent: false,
+      reason: "TELEGRAM_SEND_FAILED",
+      error:
+        error?.message ||
+        "Telegram sendMessage failed.",
+      rechargeId,
+      chatId,
+    };
+  }
 }
 
 async function safeAnswerCallback(
