@@ -1,5 +1,3 @@
-DESTINATION: services/deposit.js
-
 /**
  * SAINT CRYPTO
  * FILE: services/deposit.js
@@ -251,13 +249,6 @@ function getRechargeConfig() {
 async function notifyRechargeCreatedSafely(
   recharge
 ) {
-  /*
-   * Lazy require prevents:
-   * deposit -> telegram_recharge -> deposit
-   * circular initialization problems.
-   *
-   * Telegram failure NEVER cancels a valid recharge record.
-   */
   try {
     const telegramRecharge =
       require("./telegram_recharge");
@@ -342,10 +333,6 @@ async function submitRecharge(
       finalTransactionId
     );
 
-  /*
-   * The fingerprint already includes the user ID, so a single-field
-   * Firestore query avoids requiring a composite index for recharges.
-   */
   const duplicateQuery =
     await firestore
       .collection(COLLECTION)
@@ -454,10 +441,6 @@ async function submitRecharge(
       "Recharge submitted successfully. Waiting for admin verification.",
   };
 
-  /*
-   * Fire-and-fail-safe notification:
-   * the user's recharge remains valid even if Telegram is down.
-   */
   const telegramResult =
     await notifyRechargeCreatedSafely(
       result
@@ -749,14 +732,6 @@ async function rejectRecharge(
     );
   }
 
-  /*
-   * Backward compatibility:
-   * old callers used:
-   *   rejectRecharge(id, "reason")
-   *
-   * New callers use:
-   *   rejectRecharge(id, adminId, "reason")
-   */
   if (
     reason === "" &&
     typeof adminId === "string" &&
