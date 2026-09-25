@@ -31,27 +31,25 @@ let TelegramBot = null;
 let telegramPackageError = null;
 
 try {
-  const telegramModule =
-    require("node-telegram-bot-api");
+  const telegramModule = require("node-telegram-bot-api");
 
   const candidates = [
+    telegramModule?.Bot,
+    telegramModule?.default?.Bot,
     telegramModule,
     telegramModule?.default,
     telegramModule?.TelegramBot,
-    telegramModule?.Bot,
   ];
 
   TelegramBot =
     candidates.find(
-      (candidate) =>
-        typeof candidate === "function"
+      (candidate) => typeof candidate === "function"
     ) || null;
 
   if (!TelegramBot) {
-    telegramPackageError =
-      new Error(
-        "node-telegram-bot-api loaded, but no TelegramBot constructor was found."
-      );
+    telegramPackageError = new Error(
+      "node-telegram-bot-api loaded, but no Telegram Bot constructor was found."
+    );
   }
 } catch (error) {
   telegramPackageError = error;
@@ -576,7 +574,17 @@ function registerHandlers() {
 
   bot.on(
     "callback_query",
-    async (query) => {
+    async (ctx) => {
+      const query =
+        ctx?.callbackQuery
+          ? {
+              id: ctx.callbackQuery.id,
+              from: ctx.from || ctx.callbackQuery.from,
+              data: ctx.callbackQuery.data,
+              message: ctx.callbackQuery.message,
+            }
+          : ctx;
+
       try {
         if (
           !isAdmin(query.from?.id)
@@ -716,24 +724,47 @@ async function startTelegramRechargeBot() {
   }
 
   try {
-    bot = new TelegramBot(
-      token,
-      {
-        polling: true,
-      }
-    );
+    bot = new TelegramBot(token);
+
+    // node-telegram-bot-api v2 exposes Telegram API methods through bot.api.
+    // Keep the existing SAINT CRYPTO recharge logic unchanged by providing
+    // the small v1-style method surface this file already uses.
+    if (bot?.api) {
+      bot.sendMessage = (chatId, text, options = {}) =>
+        bot.api.sendMessage({
+          chat_id: chatId,
+          text,
+          ...options,
+        });
+
+      bot.answerCallbackQuery = (queryId, options = {}) =>
+        bot.api.answerCallbackQuery({
+          callback_query_id: queryId,
+          ...options,
+        });
+
+      bot.editMessageText = (text, options = {}) =>
+        bot.api.editMessageText({
+          text,
+          ...options,
+        });
+    }
 
     console.log(
-      "[telegram recharge] BOT DIAGNOSTIC:",
+      "[telegram recharge] BOT API READY:",
       JSON.stringify({
         constructor: bot?.constructor?.name || null,
-        typeofBot: typeof bot,
+        api: typeof bot?.api,
         sendMessage: typeof bot?.sendMessage,
         on: typeof bot?.on,
         answerCallbackQuery: typeof bot?.answerCallbackQuery,
         editMessageText: typeof bot?.editMessageText,
       })
     );
+
+    if (typeof bot.startPolling === "function") {
+      await bot.startPolling();
+    }
 
     polling = true;
     started = true;
