@@ -2629,11 +2629,42 @@ function startFinancialProcessors() {
             result
           );
 
+          // ONE Telegram bot token = ONE polling connection.
+          // Recharge owns the polling connection; withdrawal attaches
+          // its callback handlers to the same bot instance.
+          if (
+            telegramWithdrawal &&
+            typeof telegramWithdrawal.startTelegramWithdrawalBot ===
+              "function"
+          ) {
+            const sharedBot =
+              typeof telegramRecharge.getBot ===
+                "function"
+                ? telegramRecharge.getBot()
+                : null;
+
+            return telegramWithdrawal.startTelegramWithdrawalBot(
+              sharedBot
+            );
+          }
+
+          return null;
+
+        })
+        .then((result) => {
+
+          if (result) {
+            console.log(
+              "📱 Telegram withdrawal bot:",
+              result
+            );
+          }
+
         })
         .catch((error) => {
 
           console.error(
-            "❌ Telegram recharge bot failed:",
+            "❌ Telegram financial bot startup failed:",
             error.message
           );
 
@@ -2656,48 +2687,9 @@ function startFinancialProcessors() {
 
   // ----------------------------------------------------------
   // TELEGRAM WITHDRAWAL APPROVAL
+  // Handlers are attached to the shared recharge bot above.
   // ----------------------------------------------------------
 
-  if (
-    telegramWithdrawal &&
-    typeof telegramWithdrawal.startTelegramWithdrawalBot ===
-      "function"
-  ) {
-
-    try {
-
-      void telegramWithdrawal.startTelegramWithdrawalBot()
-        .then((result) => {
-
-          console.log(
-            "📱 Telegram withdrawal bot:",
-            result
-          );
-
-        })
-        .catch((error) => {
-
-          console.error(
-            "❌ Telegram withdrawal bot failed:",
-            error.message
-          );
-
-        });
-
-    } catch (error) {
-
-      console.error(
-        "❌ Telegram withdrawal startup failed:",
-        error.message
-      );
-    }
-
-  } else {
-
-    console.error(
-      "❌ Telegram withdrawal service unavailable."
-    );
-  }
 
   // ----------------------------------------------------------
   // 9PM EAT SIGNAL SCHEDULER

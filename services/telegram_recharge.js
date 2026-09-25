@@ -1,50 +1,100 @@
 /**
 
- * SAINT CRYPTO
 
- * FILE: services/telegram_recharge.js
 
- *
+ * SAINT CRYPTO
 
- * FINAL MOBILE MONEY RECHARGE APPROVAL BOT
 
- *
 
- * Destination:
+ * FILE: services/telegram_recharge.js
 
- *   services/telegram_recharge.js
 
- *
 
- * Flow:
+ *
 
- *   USER ACCEPTS TERMS
 
- *        ↓
 
- *   USER SENDS MOBILE MONEY
+ * FINAL MOBILE MONEY RECHARGE APPROVAL BOT
 
- *        ↓
 
- *   USER SUBMITS AMOUNT + TRANSACTION ID
 
- *        ↓
+ *
 
- *   PENDING_ADMIN_REVIEW
 
- *        ↓
 
- *   TELEGRAM ADMIN
+ * Destination:
 
- *     APPROVE → locked trading capital credited
 
- *     REJECT  → no ledger credit
 
- *
+ *   services/telegram_recharge.js
 
- * No blockchain / USDT / TRON / Bybit recharge verification.
 
- */
+
+ *
+
+
+
+ * Flow:
+
+
+
+ *   USER ACCEPTS TERMS
+
+
+
+ *        ↓
+
+
+
+ *   USER SENDS MOBILE MONEY
+
+
+
+ *        ↓
+
+
+
+ *   USER SUBMITS AMOUNT + TRANSACTION ID
+
+
+
+ *        ↓
+
+
+
+ *   PENDING_ADMIN_REVIEW
+
+
+
+ *        ↓
+
+
+
+ *   TELEGRAM ADMIN
+
+
+
+ *     APPROVE → locked trading capital credited
+
+
+
+ *     REJECT  → no ledger credit
+
+
+
+ *
+
+
+
+ * No blockchain / USDT / TRON / Bybit recharge verification.
+
+
+
+ */
+
+
+
+
 
 
 
@@ -52,1786 +102,3580 @@
 
 
 
+
+
+
+
 const depositService = require("./deposit");
+
+
+
+
 
 
 
 let TelegramBot = null;
 
+
+
 let telegramPackageError = null;
+
+
+
+
 
 
 
 try {
 
-  const telegramModule = require("node-telegram-bot-api");
+
+
+  const telegramModule = require("node-telegram-bot-api");
 
 
 
-  const candidates = [
-    telegramModule,
-    telegramModule?.default,
-    telegramModule?.TelegramBot,
-    telegramModule?.Bot,
-    telegramModule?.default?.Bot,
-  ];
 
 
 
-  TelegramBot =
 
-    candidates.find(
+  const candidates = [
 
-      (candidate) => typeof candidate === "function"
+    telegramModule,
 
-    ) || null;
+    telegramModule?.default,
+
+    telegramModule?.TelegramBot,
+
+    telegramModule?.Bot,
+
+    telegramModule?.default?.Bot,
+
+  ];
 
 
 
-  if (!TelegramBot) {
 
-    telegramPackageError = new Error(
 
-      "node-telegram-bot-api loaded, but no Telegram Bot constructor was found."
 
-    );
 
-  }
+  TelegramBot =
+
+
+
+    candidates.find(
+
+
+
+      (candidate) => typeof candidate === "function"
+
+
+
+    ) || null;
+
+
+
+
+
+
+
+  if (!TelegramBot) {
+
+
+
+    telegramPackageError = new Error(
+
+
+
+      "node-telegram-bot-api loaded, but no Telegram Bot constructor was found."
+
+
+
+    );
+
+
+
+  }
+
+
 
 } catch (error) {
 
-  telegramPackageError = error;
 
-  TelegramBot = null;
+
+  telegramPackageError = error;
+
+
+
+  TelegramBot = null;
+
+
 
 }
+
+
+
+
 
 
 
 let bot = null;
 
+
+
 let started = false;
+
+
 
 let polling = false;
 
 
 
+
+
+
+
 function env(name, fallback = "") {
 
-  const value = process.env[name];
+
+
+  const value = process.env[name];
 
 
 
-  return value === undefined || value === null
 
-    ? fallback
 
-    : String(value).trim();
+
+
+  return value === undefined || value === null
+
+
+
+    ? fallback
+
+
+
+    : String(value).trim();
+
+
 
 }
+
+
+
+
 
 
 
 function parseAdminIds() {
 
-  const raw =
 
-    env("TELEGRAM_ADMIN_IDS") ||
 
-    env("TELEGRAM_ADMIN_ID") ||
-
-    "";
+  const raw =
 
 
 
-  return new Set(
+    env("TELEGRAM_ADMIN_IDS") ||
 
-    raw
 
-      .split(/[, \t\r\n]+/)
 
-      .map((value) => value.trim())
+    env("TELEGRAM_ADMIN_ID") ||
 
-      .filter(Boolean)
 
-  );
+
+    "";
+
+
+
+
+
+
+
+  return new Set(
+
+
+
+    raw
+
+
+
+      .split(/[, \t\r\n]+/)
+
+
+
+      .map((value) => value.trim())
+
+
+
+      .filter(Boolean)
+
+
+
+  );
+
+
 
 }
+
+
+
+
 
 
 
 function getChatId() {
 
-  return (
 
-    env("TELEGRAM_RECHARGE_CHAT_ID") ||
 
-    env("TELEGRAM_ADMIN_CHAT_ID") ||
+  return (
 
-    env("TELEGRAM_CHAT_ID")
 
-  );
+
+    env("TELEGRAM_RECHARGE_CHAT_ID") ||
+
+
+
+    env("TELEGRAM_ADMIN_CHAT_ID") ||
+
+
+
+    env("TELEGRAM_CHAT_ID")
+
+
+
+  );
+
+
 
 }
+
+
+
+
 
 
 
 function isConfigured() {
 
-  return Boolean(
 
-    env("TELEGRAM_BOT_TOKEN") &&
 
-    getChatId()
+  return Boolean(
 
-  );
+
+
+    env("TELEGRAM_BOT_TOKEN") &&
+
+
+
+    getChatId()
+
+
+
+  );
+
+
 
 }
+
+
+
+
 
 
 
 function isAdmin(userId) {
 
-  if (!userId) {
 
-    return false;
 
-  }
+  if (!userId) {
 
 
 
-  const admins = parseAdminIds();
+    return false;
 
 
 
-  if (admins.size > 0) {
-
-    return admins.has(String(userId));
-
-  }
+  }
 
 
 
-  /*
-
-   * If TELEGRAM_ADMIN_IDS is not configured, do not silently
-
-   * authorize arbitrary users. TELEGRAM_ADMIN_ID should be used
-
-   * explicitly for a single-admin fallback.
-
-   */
-
-  const singleAdmin =
-
-    env("TELEGRAM_ADMIN_ID");
 
 
 
-  return Boolean(
 
-    singleAdmin &&
+  const admins = parseAdminIds();
 
-    String(userId) === String(singleAdmin)
 
-  );
+
+
+
+
+
+  if (admins.size > 0) {
+
+
+
+    return admins.has(String(userId));
+
+
+
+  }
+
+
+
+
+
+
+
+  /*
+
+
+
+   * If TELEGRAM_ADMIN_IDS is not configured, do not silently
+
+
+
+   * authorize arbitrary users. TELEGRAM_ADMIN_ID should be used
+
+
+
+   * explicitly for a single-admin fallback.
+
+
+
+   */
+
+
+
+  const singleAdmin =
+
+
+
+    env("TELEGRAM_ADMIN_ID");
+
+
+
+
+
+
+
+  return Boolean(
+
+
+
+    singleAdmin &&
+
+
+
+    String(userId) === String(singleAdmin)
+
+
+
+  );
+
+
 
 }
+
+
+
+
 
 
 
 function money(value) {
 
-  const amount = Number(value || 0);
+
+
+  const amount = Number(value || 0);
 
 
 
-  return new Intl.NumberFormat("en-UG", {
 
-    style: "currency",
 
-    currency: "UGX",
 
-    maximumFractionDigits: 0,
 
-  }).format(amount);
+  return new Intl.NumberFormat("en-UG", {
+
+
+
+    style: "currency",
+
+
+
+    currency: "UGX",
+
+
+
+    maximumFractionDigits: 0,
+
+
+
+  }).format(amount);
+
+
 
 }
+
+
+
+
 
 
 
 function escapeHtml(value) {
 
-  return String(value ?? "")
 
-    .replace(/&/g, "&amp;")
 
-    .replace(/</g, "&lt;")
+  return String(value ?? "")
 
-    .replace(/>/g, "&gt;");
+
+
+    .replace(/&/g, "&amp;")
+
+
+
+    .replace(/</g, "&lt;")
+
+
+
+    .replace(/>/g, "&gt;");
+
+
 
 }
+
+
+
+
 
 
 
 function normalizeRechargeRecord(input) {
 
-  /*
 
-   * getRechargeForAdmin() returns:
 
-   *   { success: true, recharge: {...} }
-
-   *
-
-   * submitRecharge()/other callers may pass the record itself.
-
-   * Normalize both shapes so the Telegram layer never renders
-
-   * undefined fields.
-
-   */
-
-  if (
-
-    input &&
-
-    input.recharge &&
-
-    typeof input.recharge === "object"
-
-  ) {
-
-    return input.recharge;
-
-  }
+  /*
 
 
 
-  return input || {};
+   * getRechargeForAdmin() returns:
+
+
+
+   *   { success: true, recharge: {...} }
+
+
+
+   *
+
+
+
+   * submitRecharge()/other callers may pass the record itself.
+
+
+
+   * Normalize both shapes so the Telegram layer never renders
+
+
+
+   * undefined fields.
+
+
+
+   */
+
+
+
+  if (
+
+
+
+    input &&
+
+
+
+    input.recharge &&
+
+
+
+    typeof input.recharge === "object"
+
+
+
+  ) {
+
+
+
+    return input.recharge;
+
+
+
+  }
+
+
+
+
+
+
+
+  return input || {};
+
+
 
 }
+
+
+
+
 
 
 
 function rechargeIdOf(recharge) {
 
-  const record =
-
-    normalizeRechargeRecord(recharge);
 
 
+  const record =
 
-  return (
 
-    record.rechargeId ||
 
-    record.id ||
+    normalizeRechargeRecord(recharge);
 
-    record.depositId ||
 
-    ""
 
-  );
+
+
+
+
+  return (
+
+
+
+    record.rechargeId ||
+
+
+
+    record.id ||
+
+
+
+    record.depositId ||
+
+
+
+    ""
+
+
+
+  );
+
+
 
 }
+
+
+
+
 
 
 
 function rechargeText(input) {
 
-  const recharge =
 
-    normalizeRechargeRecord(input);
 
+  const recharge =
 
 
-  const rechargeId =
 
-    rechargeIdOf(recharge);
+    normalizeRechargeRecord(input);
 
 
 
-  const network =
 
-    escapeHtml(
 
-      recharge.network || "UNKNOWN"
 
-    );
 
+  const rechargeId =
 
 
-  const senderName =
 
-    escapeHtml(
+    rechargeIdOf(recharge);
 
-      recharge.senderName ||
 
-      "Not supplied"
 
-    );
 
 
 
-  const transactionId =
 
-    escapeHtml(
+  const network =
 
-      recharge.transactionId ||
 
-      recharge.txid ||
 
-      "Not supplied"
+    escapeHtml(
 
-    );
 
 
+      recharge.network || "UNKNOWN"
 
-  const userId =
 
-    escapeHtml(
 
-      recharge.userId ||
+    );
 
-      "Unknown"
 
-    );
 
 
 
-  const status =
 
-    escapeHtml(
 
-      recharge.status ||
+  const senderName =
 
-      "UNKNOWN"
 
-    );
 
+    escapeHtml(
 
 
-  return [
 
-    "💰 <b>SAINT CRYPTO RECHARGE</b>",
+      recharge.senderName ||
 
-    "",
 
-    `🆔 <b>ID:</b> <code>${escapeHtml(
 
-      rechargeId || "UNKNOWN"
+      "Not supplied"
 
-    )}</code>`,
 
-    `👤 <b>User:</b> <code>${userId}</code>`,
 
-    "",
+    );
 
-    `💵 <b>Amount:</b> ${money(
 
-      recharge.amountUgx ??
 
-      recharge.amount
 
-    )}`,
 
-    `📱 <b>Network:</b> ${network}`,
 
-    `👤 <b>Sender:</b> ${senderName}`,
 
-    `🧾 <b>Transaction ID:</b> <code>${transactionId}</code>`,
+  const transactionId =
 
-    "",
 
-    `📌 <b>Status:</b> ${status}`,
 
-    `📜 <b>Terms accepted:</b> ${
+    escapeHtml(
 
-      recharge.termsAccepted ? "YES" : "NO"
 
-    }`,
 
-    "",
+      recharge.transactionId ||
 
-    "⚠️ Verify the Mobile Money transaction before approving.",
 
-    "Approval credits the amount to <b>locked trading capital</b>.",
 
-  ].join("\n");
+      recharge.txid ||
+
+
+
+      "Not supplied"
+
+
+
+    );
+
+
+
+
+
+
+
+  const userId =
+
+
+
+    escapeHtml(
+
+
+
+      recharge.userId ||
+
+
+
+      "Unknown"
+
+
+
+    );
+
+
+
+
+
+
+
+  const status =
+
+
+
+    escapeHtml(
+
+
+
+      recharge.status ||
+
+
+
+      "UNKNOWN"
+
+
+
+    );
+
+
+
+
+
+
+
+  return [
+
+
+
+    "💰 <b>SAINT CRYPTO RECHARGE</b>",
+
+
+
+    "",
+
+
+
+    `🆔 <b>ID:</b> <code>${escapeHtml(
+
+
+
+      rechargeId || "UNKNOWN"
+
+
+
+    )}</code>`,
+
+
+
+    `👤 <b>User:</b> <code>${userId}</code>`,
+
+
+
+    "",
+
+
+
+    `💵 <b>Amount:</b> ${money(
+
+
+
+      recharge.amountUgx ??
+
+
+
+      recharge.amount
+
+
+
+    )}`,
+
+
+
+    `📱 <b>Network:</b> ${network}`,
+
+
+
+    `👤 <b>Sender:</b> ${senderName}`,
+
+
+
+    `🧾 <b>Transaction ID:</b> <code>${transactionId}</code>`,
+
+
+
+    "",
+
+
+
+    `📌 <b>Status:</b> ${status}`,
+
+
+
+    `📜 <b>Terms accepted:</b> ${
+
+
+
+      recharge.termsAccepted ? "YES" : "NO"
+
+
+
+    }`,
+
+
+
+    "",
+
+
+
+    "⚠️ Verify the Mobile Money transaction before approving.",
+
+
+
+    "Approval credits the amount to <b>locked trading capital</b>.",
+
+
+
+  ].join("\n");
+
+
 
 }
+
+
+
+
 
 
 
 function rechargeKeyboard(rechargeId) {
 
-  return {
 
-    inline_keyboard: [
 
-      [
+  return {
 
-        {
 
-          text: "✅ APPROVE RECHARGE",
 
-          callback_data:
+    inline_keyboard: [
 
-            `dep_approve:${rechargeId}`,
 
-        },
 
-        {
+      [
 
-          text: "❌ REJECT",
 
-          callback_data:
 
-            `dep_reject:${rechargeId}`,
+        {
 
-        },
 
-      ],
 
-    ],
+          text: "✅ APPROVE RECHARGE",
 
-  };
+
+
+          callback_data:
+
+
+
+            `dep_approve:${rechargeId}`,
+
+
+
+        },
+
+
+
+        {
+
+
+
+          text: "❌ REJECT",
+
+
+
+          callback_data:
+
+
+
+            `dep_reject:${rechargeId}`,
+
+
+
+        },
+
+
+
+      ],
+
+
+
+    ],
+
+
+
+  };
+
+
 
 }
+
+
+
+
 
 
 
 async function sendRechargeForReview(
 
-  rechargeInput
+
+
+  rechargeInput
+
+
 
 ) {
 
-  const recharge =
 
-    normalizeRechargeRecord(
 
-      rechargeInput
-
-    );
+  const recharge =
 
 
 
-  const rechargeId =
-
-    rechargeIdOf(recharge);
+    normalizeRechargeRecord(
 
 
 
-  if (!rechargeId) {
-
-    return {
-
-      sent: false,
-
-      reason: "RECHARGE_ID_MISSING",
-
-    };
-
-  }
+      rechargeInput
 
 
 
-  if (!bot || !getChatId()) {
-
-    return {
-
-      sent: false,
-
-      reason: "TELEGRAM_NOT_CONFIGURED",
-
-    };
-
-  }
+    );
 
 
 
-  const message =
-
-    await bot.sendMessage(
-
-      getChatId(),
-
-      rechargeText(recharge),
-
-      {
-
-        parse_mode: "HTML",
-
-        disable_web_page_preview: true,
-
-        reply_markup:
-
-          rechargeKeyboard(rechargeId),
-
-      }
-
-    );
 
 
 
-  return {
 
-    sent: true,
+  const rechargeId =
 
-    messageId:
 
-      message?.message_id || null,
 
-    chatId: getChatId(),
+    rechargeIdOf(recharge);
 
-    rechargeId,
 
-  };
+
+
+
+
+
+  if (!rechargeId) {
+
+
+
+    return {
+
+
+
+      sent: false,
+
+
+
+      reason: "RECHARGE_ID_MISSING",
+
+
+
+    };
+
+
+
+  }
+
+
+
+
+
+
+
+  if (!bot || !getChatId()) {
+
+
+
+    return {
+
+
+
+      sent: false,
+
+
+
+      reason: "TELEGRAM_NOT_CONFIGURED",
+
+
+
+    };
+
+
+
+  }
+
+
+
+
+
+
+
+  const message =
+
+
+
+    await bot.sendMessage(
+
+
+
+      getChatId(),
+
+
+
+      rechargeText(recharge),
+
+
+
+      {
+
+
+
+        parse_mode: "HTML",
+
+
+
+        disable_web_page_preview: true,
+
+
+
+        reply_markup:
+
+
+
+          rechargeKeyboard(rechargeId),
+
+
+
+      }
+
+
+
+    );
+
+
+
+
+
+
+
+  return {
+
+
+
+    sent: true,
+
+
+
+    messageId:
+
+
+
+      message?.message_id || null,
+
+
+
+    chatId: getChatId(),
+
+
+
+    rechargeId,
+
+
+
+  };
+
+
 
 }
+
+
+
+
 
 
 
 async function safeAnswerCallback(
 
-  queryId,
 
-  text,
 
-  showAlert = false
+  queryId,
+
+
+
+  text,
+
+
+
+  showAlert = false
+
+
 
 ) {
 
-  try {
 
-    if (bot && queryId) {
 
-      await bot.answerCallbackQuery(
+  try {
 
-        queryId,
 
-        {
 
-          text: String(text || "").slice(
+    if (bot && queryId) {
 
-            0,
 
-            200
 
-          ),
+      await bot.answerCallbackQuery(
 
-          show_alert: showAlert,
 
-        }
 
-      );
+        queryId,
 
-    }
 
-  } catch (error) {
 
-    console.error(
+        {
 
-      "[telegram recharge] callback answer failed:",
 
-      error?.message || error
 
-    );
+          text: String(text || "").slice(
 
-  }
+
+
+            0,
+
+
+
+            200
+
+
+
+          ),
+
+
+
+          show_alert: showAlert,
+
+
+
+        }
+
+
+
+      );
+
+
+
+    }
+
+
+
+  } catch (error) {
+
+
+
+    console.error(
+
+
+
+      "[telegram recharge] callback answer failed:",
+
+
+
+      error?.message || error
+
+
+
+    );
+
+
+
+  }
+
+
 
 }
+
+
+
+
 
 
 
 async function editRechargeMessage(
 
-  chatId,
 
-  messageId,
 
-  text
+  chatId,
+
+
+
+  messageId,
+
+
+
+  text
+
+
 
 ) {
 
-  if (!bot || !chatId || !messageId) {
 
-    return;
 
-  }
+  if (!bot || !chatId || !messageId) {
 
 
 
-  try {
+    return;
 
-    await bot.editMessageText(
 
-      text,
 
-      {
+  }
 
-        chat_id: chatId,
 
-        message_id: messageId,
 
-        parse_mode: "HTML",
 
-        disable_web_page_preview: true,
 
-      }
 
-    );
 
-  } catch (error) {
+  try {
 
-    /*
 
-     * Telegram may return "message is not modified" if an
 
-     * identical update is attempted. This is not a fatal error.
+    await bot.editMessageText(
 
-     */
 
-    if (
 
-      !String(
+      text,
 
-        error?.message || ""
 
-      )
 
-        .toLowerCase()
+      {
 
-        .includes("message is not modified")
 
-    ) {
 
-      console.error(
+        chat_id: chatId,
 
-        "[telegram recharge] message edit failed:",
 
-        error?.message || error
 
-      );
+        message_id: messageId,
 
-    }
 
-  }
+
+        parse_mode: "HTML",
+
+
+
+        disable_web_page_preview: true,
+
+
+
+      }
+
+
+
+    );
+
+
+
+  } catch (error) {
+
+
+
+    /*
+
+
+
+     * Telegram may return "message is not modified" if an
+
+
+
+     * identical update is attempted. This is not a fatal error.
+
+
+
+     */
+
+
+
+    if (
+
+
+
+      !String(
+
+
+
+        error?.message || ""
+
+
+
+      )
+
+
+
+        .toLowerCase()
+
+
+
+        .includes("message is not modified")
+
+
+
+    ) {
+
+
+
+      console.error(
+
+
+
+        "[telegram recharge] message edit failed:",
+
+
+
+        error?.message || error
+
+
+
+      );
+
+
+
+    }
+
+
+
+  }
+
+
 
 }
+
+
+
+
 
 
 
 async function fetchAdminRecharge(
 
-  rechargeId
+
+
+  rechargeId
+
+
 
 ) {
 
-  if (
 
-    !depositService ||
 
-    typeof depositService.getRechargeForAdmin !==
-
-      "function"
-
-  ) {
-
-    throw new Error(
-
-      "Recharge admin lookup service is unavailable."
-
-    );
-
-  }
+  if (
 
 
 
-  const result =
-
-    await depositService.getRechargeForAdmin(
-
-      rechargeId
-
-    );
+    !depositService ||
 
 
 
-  return normalizeRechargeRecord(
+    typeof depositService.getRechargeForAdmin !==
 
-    result
 
-  );
+
+      "function"
+
+
+
+  ) {
+
+
+
+    throw new Error(
+
+
+
+      "Recharge admin lookup service is unavailable."
+
+
+
+    );
+
+
+
+  }
+
+
+
+
+
+
+
+  const result =
+
+
+
+    await depositService.getRechargeForAdmin(
+
+
+
+      rechargeId
+
+
+
+    );
+
+
+
+
+
+
+
+  return normalizeRechargeRecord(
+
+
+
+    result
+
+
+
+  );
+
+
 
 }
+
+
+
+
 
 
 
 async function handleApprove(
 
-  query,
 
-  rechargeId
+
+  query,
+
+
+
+  rechargeId
+
+
 
 ) {
 
-  try {
 
-    const recharge =
 
-      await fetchAdminRecharge(
+  try {
 
-        rechargeId
 
-      );
 
+    const recharge =
 
 
-    if (!recharge?.rechargeId) {
 
-      await safeAnswerCallback(
+      await fetchAdminRecharge(
 
-        query.id,
 
-        "Recharge not found.",
 
-        true
+        rechargeId
 
-      );
 
-      return;
 
-    }
+      );
 
 
 
-    if (
 
-      recharge.status !==
 
-      "PENDING_ADMIN_REVIEW"
 
-    ) {
 
-      await safeAnswerCallback(
+    if (!recharge?.rechargeId) {
 
-        query.id,
 
-        `Cannot approve: ${recharge.status || "UNKNOWN"}`,
 
-        true
+      await safeAnswerCallback(
 
-      );
 
-      return;
 
-    }
+        query.id,
 
 
 
-    const result =
+        "Recharge not found.",
 
-      await depositService.approveRecharge(
 
-        rechargeId,
 
-        String(query.from?.id || "")
+        true
 
-      );
 
 
+      );
 
-    /*
 
-     * Re-read the record after approval so the edited Telegram
 
-     * message contains the real recharge details, not the small
+      return;
 
-     * service-result object.
 
-     */
 
-    let finalRecharge = recharge;
+    }
 
 
 
-    try {
 
-      finalRecharge =
 
-        await fetchAdminRecharge(
 
-          rechargeId
 
-        );
+    if (
 
-    } catch (refreshError) {
 
-      console.error(
 
-        "[telegram recharge] post-approval refresh failed:",
+      recharge.status !==
 
-        refreshError?.message || refreshError
 
-      );
 
-    }
+      "PENDING_ADMIN_REVIEW"
 
 
 
-    await safeAnswerCallback(
+    ) {
 
-      query.id,
 
-      result?.alreadyApproved
 
-        ? "Recharge was already approved."
+      await safeAnswerCallback(
 
-        : "Recharge approved. Locked trading capital credited."
 
-    );
 
+        query.id,
 
 
-    if (bot && query.message) {
 
-      const approvedText = [
+        `Cannot approve: ${recharge.status || "UNKNOWN"}`,
 
-        rechargeText(finalRecharge),
 
-        "",
 
-        "🟢 <b>APPROVED</b>",
+        true
 
-        "Locked trading capital has been credited to the user's ledger.",
 
-      ].join("\n");
 
+      );
 
 
-      await editRechargeMessage(
 
-        query.message.chat.id,
+      return;
 
-        query.message.message_id,
 
-        approvedText
 
-      );
+    }
 
-    }
 
-  } catch (error) {
 
-    console.error(
 
-      "[telegram recharge] approval failed:",
 
-      error?.stack || error
 
-    );
 
+    const result =
 
 
-    await safeAnswerCallback(
 
-      query.id,
+      await depositService.approveRecharge(
 
-      error?.message ||
 
-        "Could not approve recharge.",
 
-      true
+        rechargeId,
 
-    );
 
-  }
+
+        String(query.from?.id || "")
+
+
+
+      );
+
+
+
+
+
+
+
+    /*
+
+
+
+     * Re-read the record after approval so the edited Telegram
+
+
+
+     * message contains the real recharge details, not the small
+
+
+
+     * service-result object.
+
+
+
+     */
+
+
+
+    let finalRecharge = recharge;
+
+
+
+
+
+
+
+    try {
+
+
+
+      finalRecharge =
+
+
+
+        await fetchAdminRecharge(
+
+
+
+          rechargeId
+
+
+
+        );
+
+
+
+    } catch (refreshError) {
+
+
+
+      console.error(
+
+
+
+        "[telegram recharge] post-approval refresh failed:",
+
+
+
+        refreshError?.message || refreshError
+
+
+
+      );
+
+
+
+    }
+
+
+
+
+
+
+
+    await safeAnswerCallback(
+
+
+
+      query.id,
+
+
+
+      result?.alreadyApproved
+
+
+
+        ? "Recharge was already approved."
+
+
+
+        : "Recharge approved. Locked trading capital credited."
+
+
+
+    );
+
+
+
+
+
+
+
+    if (bot && query.message) {
+
+
+
+      const approvedText = [
+
+
+
+        rechargeText(finalRecharge),
+
+
+
+        "",
+
+
+
+        "🟢 <b>APPROVED</b>",
+
+
+
+        "Locked trading capital has been credited to the user's ledger.",
+
+
+
+      ].join("\n");
+
+
+
+
+
+
+
+      await editRechargeMessage(
+
+
+
+        query.message.chat.id,
+
+
+
+        query.message.message_id,
+
+
+
+        approvedText
+
+
+
+      );
+
+
+
+    }
+
+
+
+  } catch (error) {
+
+
+
+    console.error(
+
+
+
+      "[telegram recharge] approval failed:",
+
+
+
+      error?.stack || error
+
+
+
+    );
+
+
+
+
+
+
+
+    await safeAnswerCallback(
+
+
+
+      query.id,
+
+
+
+      error?.message ||
+
+
+
+        "Could not approve recharge.",
+
+
+
+      true
+
+
+
+    );
+
+
+
+  }
+
+
 
 }
+
+
+
+
 
 
 
 async function handleReject(
 
-  query,
 
-  rechargeId
+
+  query,
+
+
+
+  rechargeId
+
+
 
 ) {
 
-  try {
 
-    const recharge =
 
-      await fetchAdminRecharge(
+  try {
 
-        rechargeId
 
-      );
 
+    const recharge =
 
 
-    if (!recharge?.rechargeId) {
 
-      await safeAnswerCallback(
+      await fetchAdminRecharge(
 
-        query.id,
 
-        "Recharge not found.",
 
-        true
+        rechargeId
 
-      );
 
-      return;
 
-    }
+      );
 
 
 
-    if (
 
-      recharge.status !==
 
-      "PENDING_ADMIN_REVIEW"
 
-    ) {
 
-      await safeAnswerCallback(
+    if (!recharge?.rechargeId) {
 
-        query.id,
 
-        `Cannot reject: ${recharge.status || "UNKNOWN"}`,
 
-        true
+      await safeAnswerCallback(
 
-      );
 
-      return;
 
-    }
+        query.id,
 
 
 
-    const result =
+        "Recharge not found.",
 
-      await depositService.rejectRecharge(
 
-        rechargeId,
 
-        String(query.from?.id || ""),
+        true
 
-        "Rejected by Telegram admin."
 
-      );
 
+      );
 
 
-    let finalRecharge = recharge;
 
+      return;
 
 
-    try {
 
-      finalRecharge =
+    }
 
-        await fetchAdminRecharge(
 
-          rechargeId
 
-        );
 
-    } catch (refreshError) {
 
-      console.error(
 
-        "[telegram recharge] post-rejection refresh failed:",
 
-        refreshError?.message || refreshError
+    if (
 
-      );
 
-    }
 
+      recharge.status !==
 
 
-    await safeAnswerCallback(
 
-      query.id,
+      "PENDING_ADMIN_REVIEW"
 
-      result?.alreadyRejected
 
-        ? "Recharge was already rejected."
 
-        : "Recharge rejected. No ledger credit was made."
+    ) {
 
-    );
 
 
+      await safeAnswerCallback(
 
-    if (bot && query.message) {
 
-      const rejectedText = [
 
-        rechargeText(finalRecharge),
+        query.id,
 
-        "",
 
-        "🔴 <b>REJECTED</b>",
 
-        "No locked trading capital was credited.",
+        `Cannot reject: ${recharge.status || "UNKNOWN"}`,
 
-      ].join("\n");
 
 
+        true
 
-      await editRechargeMessage(
 
-        query.message.chat.id,
 
-        query.message.message_id,
+      );
 
-        rejectedText
 
-      );
 
-    }
+      return;
 
-  } catch (error) {
 
-    console.error(
 
-      "[telegram recharge] rejection failed:",
+    }
 
-      error?.stack || error
 
-    );
 
 
 
-    await safeAnswerCallback(
 
-      query.id,
 
-      error?.message ||
+    const result =
 
-        "Could not reject recharge.",
 
-      true
 
-    );
+      await depositService.rejectRecharge(
 
-  }
+
+
+        rechargeId,
+
+
+
+        String(query.from?.id || ""),
+
+
+
+        "Rejected by Telegram admin."
+
+
+
+      );
+
+
+
+
+
+
+
+    let finalRecharge = recharge;
+
+
+
+
+
+
+
+    try {
+
+
+
+      finalRecharge =
+
+
+
+        await fetchAdminRecharge(
+
+
+
+          rechargeId
+
+
+
+        );
+
+
+
+    } catch (refreshError) {
+
+
+
+      console.error(
+
+
+
+        "[telegram recharge] post-rejection refresh failed:",
+
+
+
+        refreshError?.message || refreshError
+
+
+
+      );
+
+
+
+    }
+
+
+
+
+
+
+
+    await safeAnswerCallback(
+
+
+
+      query.id,
+
+
+
+      result?.alreadyRejected
+
+
+
+        ? "Recharge was already rejected."
+
+
+
+        : "Recharge rejected. No ledger credit was made."
+
+
+
+    );
+
+
+
+
+
+
+
+    if (bot && query.message) {
+
+
+
+      const rejectedText = [
+
+
+
+        rechargeText(finalRecharge),
+
+
+
+        "",
+
+
+
+        "🔴 <b>REJECTED</b>",
+
+
+
+        "No locked trading capital was credited.",
+
+
+
+      ].join("\n");
+
+
+
+
+
+
+
+      await editRechargeMessage(
+
+
+
+        query.message.chat.id,
+
+
+
+        query.message.message_id,
+
+
+
+        rejectedText
+
+
+
+      );
+
+
+
+    }
+
+
+
+  } catch (error) {
+
+
+
+    console.error(
+
+
+
+      "[telegram recharge] rejection failed:",
+
+
+
+      error?.stack || error
+
+
+
+    );
+
+
+
+
+
+
+
+    await safeAnswerCallback(
+
+
+
+      query.id,
+
+
+
+      error?.message ||
+
+
+
+        "Could not reject recharge.",
+
+
+
+      true
+
+
+
+    );
+
+
+
+  }
+
+
 
 }
+
+
+
+
 
 
 
 function registerHandlers() {
 
-  if (!bot) {
 
-    return;
 
-  }
+  if (!bot) {
 
 
 
-  bot.on(
+    return;
 
-    "callback_query",
 
-    async (ctx) => {
 
-      const query =
+  }
 
-        ctx?.callbackQuery
 
-          ? {
 
-              id: ctx.callbackQuery.id,
 
-              from: ctx.from || ctx.callbackQuery.from,
 
-              data: ctx.callbackQuery.data,
 
-              message: ctx.callbackQuery.message,
 
-            }
+  bot.on(
 
-          : ctx;
 
 
+    "callback_query",
 
-      try {
 
-        if (
 
-          !isAdmin(query.from?.id)
+    async (ctx) => {
 
-        ) {
 
-          await safeAnswerCallback(
 
-            query.id,
+      const query =
 
-            "You are not authorized for admin actions.",
 
-            true
 
-          );
+        ctx?.callbackQuery
 
-          return;
 
-        }
 
+          ? {
 
 
-        const data =
 
-          String(query.data || "");
+              id: ctx.callbackQuery.id,
 
 
 
-        if (
+              from: ctx.from || ctx.callbackQuery.from,
 
-          data.startsWith(
 
-            "dep_approve:"
 
-          )
+              data: ctx.callbackQuery.data,
 
-        ) {
 
-          const rechargeId =
 
-            data.substring(
+              message: ctx.callbackQuery.message,
 
-              "dep_approve:".length
 
-            );
 
+            }
 
 
-          if (!rechargeId) {
 
-            await safeAnswerCallback(
+          : ctx;
 
-              query.id,
 
-              "Recharge ID is missing.",
 
-              true
 
-            );
 
-            return;
 
-          }
 
+      try {
 
 
-          await handleApprove(
 
-            query,
+        if (
 
-            rechargeId
 
-          );
 
-          return;
+          !isAdmin(query.from?.id)
 
-        }
 
 
+        ) {
 
-        if (
 
-          data.startsWith(
 
-            "dep_reject:"
+          await safeAnswerCallback(
 
-          )
 
-        ) {
 
-          const rechargeId =
+            query.id,
 
-            data.substring(
 
-              "dep_reject:".length
 
-            );
+            "You are not authorized for admin actions.",
 
 
 
-          if (!rechargeId) {
+            true
 
-            await safeAnswerCallback(
 
-              query.id,
 
-              "Recharge ID is missing.",
+          );
 
-              true
 
-            );
 
-            return;
+          return;
 
-          }
 
 
+        }
 
-          await handleReject(
 
-            query,
 
-            rechargeId
 
-          );
 
-          return;
 
-        }
 
+        const data =
 
 
-        await safeAnswerCallback(
 
-          query.id,
+          String(query.data || "");
 
-          "Unknown recharge action.",
 
-          true
 
-        );
 
-      } catch (error) {
 
-        console.error(
 
-          "[telegram recharge] callback handler error:",
 
-          error?.stack || error
+        if (
 
-        );
 
 
+          data.startsWith(
 
-        await safeAnswerCallback(
 
-          query.id,
 
-          "Recharge admin action failed.",
+            "dep_approve:"
 
-          true
 
-        );
 
-      }
+          )
 
-    }
 
-  );
+
+        ) {
+
+
+
+          const rechargeId =
+
+
+
+            data.substring(
+
+
+
+              "dep_approve:".length
+
+
+
+            );
+
+
+
+
+
+
+
+          if (!rechargeId) {
+
+
+
+            await safeAnswerCallback(
+
+
+
+              query.id,
+
+
+
+              "Recharge ID is missing.",
+
+
+
+              true
+
+
+
+            );
+
+
+
+            return;
+
+
+
+          }
+
+
+
+
+
+
+
+          await handleApprove(
+
+
+
+            query,
+
+
+
+            rechargeId
+
+
+
+          );
+
+
+
+          return;
+
+
+
+        }
+
+
+
+
+
+
+
+        if (
+
+
+
+          data.startsWith(
+
+
+
+            "dep_reject:"
+
+
+
+          )
+
+
+
+        ) {
+
+
+
+          const rechargeId =
+
+
+
+            data.substring(
+
+
+
+              "dep_reject:".length
+
+
+
+            );
+
+
+
+
+
+
+
+          if (!rechargeId) {
+
+
+
+            await safeAnswerCallback(
+
+
+
+              query.id,
+
+
+
+              "Recharge ID is missing.",
+
+
+
+              true
+
+
+
+            );
+
+
+
+            return;
+
+
+
+          }
+
+
+
+
+
+
+
+          await handleReject(
+
+
+
+            query,
+
+
+
+            rechargeId
+
+
+
+          );
+
+
+
+          return;
+
+
+
+        }
+
+
+
+
+
+
+
+        await safeAnswerCallback(
+
+
+
+          query.id,
+
+
+
+          "Unknown recharge action.",
+
+
+
+          true
+
+
+
+        );
+
+
+
+      } catch (error) {
+
+
+
+        console.error(
+
+
+
+          "[telegram recharge] callback handler error:",
+
+
+
+          error?.stack || error
+
+
+
+        );
+
+
+
+
+
+
+
+        await safeAnswerCallback(
+
+
+
+          query.id,
+
+
+
+          "Recharge admin action failed.",
+
+
+
+          true
+
+
+
+        );
+
+
+
+      }
+
+
+
+    }
+
+
+
+  );
+
+
 
 }
+
+
+
+
 
 
 
 async function startTelegramRechargeBot() {
 
-  if (started) {
 
-    return {
 
-      started: true,
+  if (started) {
 
-      alreadyRunning: true,
 
-      polling,
 
-      configured: isConfigured(),
+    return {
 
-    };
 
-  }
 
+      started: true,
 
 
-  if (!TelegramBot) {
 
-    console.error(
+      alreadyRunning: true,
 
-      "[telegram recharge] Telegram package could not be initialized:",
 
-      telegramPackageError?.message ||
 
-        "Unknown Telegram package error."
+      polling,
 
-    );
 
 
+      configured: isConfigured(),
 
-    return {
 
-      started: false,
 
-      reason:
+    };
 
-        "TELEGRAM_PACKAGE_INVALID",
 
-      error:
 
-        telegramPackageError?.message ||
+  }
 
-        "node-telegram-bot-api constructor is unavailable.",
 
-    };
 
-  }
 
 
 
-  const token =
 
-    env("TELEGRAM_BOT_TOKEN");
+  if (!TelegramBot) {
 
 
 
-  if (!token) {
+    console.error(
 
-    console.warn(
 
-      "[telegram recharge] TELEGRAM_BOT_TOKEN is not configured."
 
-    );
+      "[telegram recharge] Telegram package could not be initialized:",
 
 
 
-    return {
+      telegramPackageError?.message ||
 
-      started: false,
 
-      reason:
 
-        "TELEGRAM_BOT_TOKEN_MISSING",
+        "Unknown Telegram package error."
 
-    };
 
-  }
 
+    );
 
 
-  if (typeof TelegramBot !== "function") {
 
-    return {
 
-      started: false,
 
-      reason:
 
-        "TELEGRAM_CONSTRUCTOR_UNAVAILABLE",
 
-    };
+    return {
 
-  }
 
 
+      started: false,
 
-  try {
 
-    bot = new TelegramBot(token);
 
+      reason:
 
 
-    // node-telegram-bot-api v2 exposes Telegram API methods through bot.api.
 
-    // Keep the existing SAINT CRYPTO recharge logic unchanged by providing
+        "TELEGRAM_PACKAGE_INVALID",
 
-    // the small v1-style method surface this file already uses.
 
-    if (bot?.api) {
 
-      bot.sendMessage = (chatId, text, options = {}) =>
+      error:
 
-        bot.api.sendMessage({
 
-          chat_id: chatId,
 
-          text,
+        telegramPackageError?.message ||
 
-          ...options,
 
-        });
 
+        "node-telegram-bot-api constructor is unavailable.",
 
 
-      bot.answerCallbackQuery = (queryId, options = {}) =>
 
-        bot.api.answerCallbackQuery({
+    };
 
-          callback_query_id: queryId,
 
-          ...options,
 
-        });
+  }
 
 
 
-      bot.editMessageText = (text, options = {}) =>
 
-        bot.api.editMessageText({
 
-          text,
 
-          ...options,
 
-        });
+  const token =
 
-    }
 
 
+    env("TELEGRAM_BOT_TOKEN");
 
-    console.log(
 
-      "[telegram recharge] BOT API READY:",
 
-      JSON.stringify({
 
-        constructor: bot?.constructor?.name || null,
 
-        api: typeof bot?.api,
 
-        sendMessage: typeof bot?.sendMessage,
 
-        on: typeof bot?.on,
+  if (!token) {
 
-        answerCallbackQuery: typeof bot?.answerCallbackQuery,
 
-        editMessageText: typeof bot?.editMessageText,
 
-      })
+    console.warn(
 
-    );
 
 
+      "[telegram recharge] TELEGRAM_BOT_TOKEN is not configured."
 
-    if (typeof bot.startPolling === "function") {
 
-      await bot.startPolling();
 
-    }
+    );
 
 
 
-    polling = true;
 
-    started = true;
 
 
 
-    registerHandlers();
+    return {
 
 
 
-    bot.on(
+      started: false,
 
-      "polling_error",
 
-      (error) => {
 
-        console.error(
+      reason:
 
-          "[telegram recharge] polling error:",
 
-          error?.message || error
 
-        );
+        "TELEGRAM_BOT_TOKEN_MISSING",
 
-      }
 
-    );
 
+    };
 
 
-    bot.on(
 
-      "error",
+  }
 
-      (error) => {
 
-        console.error(
 
-          "[telegram recharge] bot error:",
 
-          error?.message || error
 
-        );
 
-      }
 
-    );
+  if (typeof TelegramBot !== "function") {
 
 
 
-    console.log(
+    return {
 
-      "Telegram recharge approval bot started."
 
-    );
 
+      started: false,
 
 
-    return {
 
-      started: true,
+      reason:
 
-      polling: true,
 
-      configured: isConfigured(),
 
-    };
+        "TELEGRAM_CONSTRUCTOR_UNAVAILABLE",
 
-  } catch (error) {
 
-    bot = null;
 
-    polling = false;
+    };
 
-    started = false;
 
 
+  }
 
-    console.error(
 
-      "[telegram recharge] bot startup failed:",
 
-      error?.stack || error
 
-    );
 
 
 
-    return {
+  try {
 
-      started: false,
 
-      reason:
 
-        "TELEGRAM_START_FAILED",
+    bot = new TelegramBot(token);
 
-      error:
 
-        error?.message ||
 
-        "Unable to start Telegram recharge bot.",
 
-    };
 
-  }
+
+
+    // node-telegram-bot-api v2 exposes Telegram API methods through bot.api.
+
+
+
+    // Keep the existing SAINT CRYPTO recharge logic unchanged by providing
+
+
+
+    // the small v1-style method surface this file already uses.
+
+
+
+    if (bot?.api) {
+
+
+
+      bot.sendMessage = (chatId, text, options = {}) =>
+
+
+
+        bot.api.sendMessage({
+
+
+
+          chat_id: chatId,
+
+
+
+          text,
+
+
+
+          ...options,
+
+
+
+        });
+
+
+
+
+
+
+
+      bot.answerCallbackQuery = (queryId, options = {}) =>
+
+
+
+        bot.api.answerCallbackQuery({
+
+
+
+          callback_query_id: queryId,
+
+
+
+          ...options,
+
+
+
+        });
+
+
+
+
+
+
+
+      bot.editMessageText = (text, options = {}) =>
+
+
+
+        bot.api.editMessageText({
+
+
+
+          text,
+
+
+
+          ...options,
+
+
+
+        });
+
+
+
+    }
+
+
+
+
+
+
+
+    console.log(
+
+
+
+      "[telegram recharge] BOT API READY:",
+
+
+
+      JSON.stringify({
+
+
+
+        constructor: bot?.constructor?.name || null,
+
+
+
+        api: typeof bot?.api,
+
+
+
+        sendMessage: typeof bot?.sendMessage,
+
+
+
+        on: typeof bot?.on,
+
+
+
+        answerCallbackQuery: typeof bot?.answerCallbackQuery,
+
+
+
+        editMessageText: typeof bot?.editMessageText,
+
+
+
+      })
+
+
+
+    );
+
+
+
+
+
+
+
+    if (typeof bot.startPolling === "function") {
+
+
+
+      await bot.startPolling();
+
+
+
+    }
+
+
+
+
+
+
+
+    polling = true;
+
+
+
+    started = true;
+
+
+
+
+
+
+
+    registerHandlers();
+
+
+
+
+
+
+
+    bot.on(
+
+
+
+      "polling_error",
+
+
+
+      (error) => {
+
+
+
+        console.error(
+
+
+
+          "[telegram recharge] polling error:",
+
+
+
+          error?.message || error
+
+
+
+        );
+
+
+
+      }
+
+
+
+    );
+
+
+
+
+
+
+
+    bot.on(
+
+
+
+      "error",
+
+
+
+      (error) => {
+
+
+
+        console.error(
+
+
+
+          "[telegram recharge] bot error:",
+
+
+
+          error?.message || error
+
+
+
+        );
+
+
+
+      }
+
+
+
+    );
+
+
+
+
+
+
+
+    console.log(
+
+
+
+      "Telegram recharge approval bot started."
+
+
+
+    );
+
+
+
+
+
+
+
+    return {
+
+
+
+      started: true,
+
+
+
+      polling: true,
+
+
+
+      configured: isConfigured(),
+
+
+
+    };
+
+
+
+  } catch (error) {
+
+
+
+    bot = null;
+
+
+
+    polling = false;
+
+
+
+    started = false;
+
+
+
+
+
+
+
+    console.error(
+
+
+
+      "[telegram recharge] bot startup failed:",
+
+
+
+      error?.stack || error
+
+
+
+    );
+
+
+
+
+
+
+
+    return {
+
+
+
+      started: false,
+
+
+
+      reason:
+
+
+
+        "TELEGRAM_START_FAILED",
+
+
+
+      error:
+
+
+
+        error?.message ||
+
+
+
+        "Unable to start Telegram recharge bot.",
+
+
+
+    };
+
+
+
+  }
+
+
 
 }
+
+
+
+
 
 
 
 async function stopTelegramRechargeBot() {
 
-  const currentBot = bot;
+
+
+  const currentBot = bot;
 
 
 
-  if (!currentBot) {
-
-    started = false;
-
-    polling = false;
 
 
 
-    return {
 
-      stopped: true,
-
-      wasRunning: false,
-
-      pollingStopped: false,
-
-    };
-
-  }
+  if (!currentBot) {
 
 
 
-  let pollingStopped = false;
+    started = false;
 
 
 
-  try {
-
-    if (typeof currentBot.stopPolling === "function") {
-
-      await currentBot.stopPolling();
-
-      pollingStopped = true;
-
-    } else if (typeof currentBot.stop === "function") {
-
-      await currentBot.stop();
-
-      pollingStopped = true;
-
-    }
-
-  } catch (error) {
-
-    const message = String(error?.message || error || "");
+    polling = false;
 
 
 
-    // During a Render/SIGTERM shutdown, some Telegram wrappers expose the
-
-    // polling client without a stopPolling method. The process itself is
-
-    // already terminating, so do not turn graceful shutdown into a scary
-
-    // error log. Report only unexpected cleanup failures.
-
-    if (!/stopPolling.*not a function/i.test(message)) {
-
-      console.warn(
-
-        "[telegram recharge] graceful stop warning:",
-
-        message
-
-      );
-
-    }
-
-  }
 
 
 
-  bot = null;
 
-  started = false;
-
-  polling = false;
+    return {
 
 
 
-  return {
+      stopped: true,
 
-    stopped: true,
 
-    wasRunning: true,
 
-    pollingStopped,
+      wasRunning: false,
 
-  };
+
+
+      pollingStopped: false,
+
+
+
+    };
+
+
+
+  }
+
+
+
+
+
+
+
+  let pollingStopped = false;
+
+
+
+
+
+
+
+  try {
+
+
+
+    if (typeof currentBot.stopPolling === "function") {
+
+
+
+      await currentBot.stopPolling();
+
+
+
+      pollingStopped = true;
+
+
+
+    } else if (typeof currentBot.stop === "function") {
+
+
+
+      await currentBot.stop();
+
+
+
+      pollingStopped = true;
+
+
+
+    }
+
+
+
+  } catch (error) {
+
+
+
+    const message = String(error?.message || error || "");
+
+
+
+
+
+
+
+    // During a Render/SIGTERM shutdown, some Telegram wrappers expose the
+
+
+
+    // polling client without a stopPolling method. The process itself is
+
+
+
+    // already terminating, so do not turn graceful shutdown into a scary
+
+
+
+    // error log. Report only unexpected cleanup failures.
+
+
+
+    if (!/stopPolling.*not a function/i.test(message)) {
+
+
+
+      console.warn(
+
+
+
+        "[telegram recharge] graceful stop warning:",
+
+
+
+        message
+
+
+
+      );
+
+
+
+    }
+
+
+
+  }
+
+
+
+
+
+
+
+  bot = null;
+
+
+
+  started = false;
+
+
+
+  polling = false;
+
+
+
+
+
+
+
+  return {
+
+
+
+    stopped: true,
+
+
+
+    wasRunning: true,
+
+
+
+    pollingStopped,
+
+
+
+  };
+
+
 
 }
+
+
+
+
 
 
 
 async function notifyRechargeCreated(
 
-  rechargeInput
+
+
+  rechargeInput
+
+
 
 ) {
 
-  try {
 
-    const recharge =
 
-      normalizeRechargeRecord(
-
-        rechargeInput
-
-      );
+  try {
 
 
 
-    return await sendRechargeForReview(
-
-      recharge
-
-    );
-
-  } catch (error) {
-
-    console.error(
-
-      "[telegram recharge] notification failed:",
-
-      error?.stack || error
-
-    );
+    const recharge =
 
 
 
-    return {
+      normalizeRechargeRecord(
 
-      sent: false,
 
-      reason:
 
-        "TELEGRAM_SEND_FAILED",
+        rechargeInput
 
-      error:
 
-        error?.message ||
 
-        "Telegram notification failed.",
+      );
 
-    };
 
-  }
+
+
+
+
+
+    return await sendRechargeForReview(
+
+
+
+      recharge
+
+
+
+    );
+
+
+
+  } catch (error) {
+
+
+
+    console.error(
+
+
+
+      "[telegram recharge] notification failed:",
+
+
+
+      error?.stack || error
+
+
+
+    );
+
+
+
+
+
+
+
+    return {
+
+
+
+      sent: false,
+
+
+
+      reason:
+
+
+
+        "TELEGRAM_SEND_FAILED",
+
+
+
+      error:
+
+
+
+        error?.message ||
+
+
+
+        "Telegram notification failed.",
+
+
+
+    };
+
+
+
+  }
+
+
 
 }
 
 
+
+
+
+
+
+function getBot() {
+
+  return bot;
+
+}
 
 function getStatus() {
 
-  return {
 
-    started,
 
-    polling,
+  return {
 
-    configured: isConfigured(),
 
-    hasBot: Boolean(bot),
 
-    adminIdsConfigured:
+    started,
 
-      parseAdminIds().size > 0,
 
-    chatIdConfigured:
 
-      Boolean(getChatId()),
+    polling,
 
-  };
+
+
+    configured: isConfigured(),
+
+
+
+    hasBot: Boolean(bot),
+
+
+
+    adminIdsConfigured:
+
+
+
+      parseAdminIds().size > 0,
+
+
+
+    chatIdConfigured:
+
+
+
+      Boolean(getChatId()),
+
+
+
+  };
+
+
 
 }
+
+
+
+
 
 
 
 module.exports = {
 
-  startTelegramRechargeBot,
 
-  stopTelegramRechargeBot,
 
-  notifyRechargeCreated,
+  startTelegramRechargeBot,
 
-  sendRechargeForReview,
 
-  getStatus,
+
+  stopTelegramRechargeBot,
+
+
+
+  notifyRechargeCreated,
+
+
+
+  sendRechargeForReview,
+
+
+
+  getStatus,
+
+  getBot,
+
+
 
 };
