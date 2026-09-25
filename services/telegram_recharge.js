@@ -44,10 +44,7 @@ try {
   TelegramBot =
     candidates.find(
       (candidate) =>
-        typeof candidate === "function" &&
-        typeof candidate.prototype?.sendMessage === "function" &&
-        typeof candidate.prototype?.answerCallbackQuery === "function" &&
-        typeof candidate.prototype?.editMessageText === "function"
+        typeof candidate === "function"
     ) || null;
 
   if (!TelegramBot) {
