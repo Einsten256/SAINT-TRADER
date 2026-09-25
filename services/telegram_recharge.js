@@ -723,6 +723,18 @@ async function startTelegramRechargeBot() {
       }
     );
 
+    console.log(
+      "[telegram recharge] BOT DIAGNOSTIC:",
+      JSON.stringify({
+        constructor: bot?.constructor?.name || null,
+        typeofBot: typeof bot,
+        sendMessage: typeof bot?.sendMessage,
+        on: typeof bot?.on,
+        answerCallbackQuery: typeof bot?.answerCallbackQuery,
+        editMessageText: typeof bot?.editMessageText,
+      })
+    );
+
     polling = true;
     started = true;
 
