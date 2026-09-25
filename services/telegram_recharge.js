@@ -2,95 +2,95 @@
 
 
 
- * SAINT CRYPTO
+ * SAINT CRYPTO
 
 
 
- * FILE: services/telegram_recharge.js
+ * FILE: services/telegram_recharge.js
 
 
 
- *
+ *
 
 
 
- * FINAL MOBILE MONEY RECHARGE APPROVAL BOT
+ * FINAL MOBILE MONEY RECHARGE APPROVAL BOT
 
 
 
- *
+ *
 
 
 
- * Destination:
+ * Destination:
 
 
 
- *   services/telegram_recharge.js
+ *   services/telegram_recharge.js
 
 
 
- *
+ *
 
 
 
- * Flow:
+ * Flow:
 
 
 
- *   USER ACCEPTS TERMS
+ *   USER ACCEPTS TERMS
 
 
 
- *        ↓
+ *        ↓
 
 
 
- *   USER SENDS MOBILE MONEY
+ *   USER SENDS MOBILE MONEY
 
 
 
- *        ↓
+ *        ↓
 
 
 
- *   USER SUBMITS AMOUNT + TRANSACTION ID
+ *   USER SUBMITS AMOUNT + TRANSACTION ID
 
 
 
- *        ↓
+ *        ↓
 
 
 
- *   PENDING_ADMIN_REVIEW
+ *   PENDING_ADMIN_REVIEW
 
 
 
- *        ↓
+ *        ↓
 
 
 
- *   TELEGRAM ADMIN
+ *   TELEGRAM ADMIN
 
 
 
- *     APPROVE → locked trading capital credited
+ *     APPROVE → locked trading capital credited
 
 
 
- *     REJECT  → no ledger credit
+ *     REJECT  → no ledger credit
 
 
 
- *
+ *
 
 
 
- * No blockchain / USDT / TRON / Bybit recharge verification.
+ * No blockchain / USDT / TRON / Bybit recharge verification.
 
 
 
- */
+ */
 
 
 
@@ -130,7 +130,7 @@ try {
 
 
 
-  const telegramModule = require("node-telegram-bot-api");
+  const telegramModule = require("node-telegram-bot-api");
 
 
 
@@ -138,39 +138,19 @@ try {
 
 
 
-  const candidates = [
+  const candidates = [
 
-    telegramModule,
+    telegramModule,
 
-    telegramModule?.default,
+    telegramModule?.default,
 
-    telegramModule?.TelegramBot,
+    telegramModule?.TelegramBot,
 
-    telegramModule?.Bot,
+    telegramModule?.Bot,
 
-    telegramModule?.default?.Bot,
+    telegramModule?.default?.Bot,
 
-  ];
-
-
-
-
-
-
-
-  TelegramBot =
-
-
-
-    candidates.find(
-
-
-
-      (candidate) => typeof candidate === "function"
-
-
-
-    ) || null;
+  ];
 
 
 
@@ -178,23 +158,43 @@ try {
 
 
 
-  if (!TelegramBot) {
+  TelegramBot =
 
 
 
-    telegramPackageError = new Error(
+    candidates.find(
 
 
 
-      "node-telegram-bot-api loaded, but no Telegram Bot constructor was found."
+      (candidate) => typeof candidate === "function"
 
 
 
-    );
+    ) || null;
 
 
 
-  }
+
+
+
+
+  if (!TelegramBot) {
+
+
+
+    telegramPackageError = new Error(
+
+
+
+      "node-telegram-bot-api loaded, but no Telegram Bot constructor was found."
+
+
+
+    );
+
+
+
+  }
 
 
 
@@ -202,11 +202,11 @@ try {
 
 
 
-  telegramPackageError = error;
+  telegramPackageError = error;
 
 
 
-  TelegramBot = null;
+  TelegramBot = null;
 
 
 
@@ -238,7 +238,7 @@ function env(name, fallback = "") {
 
 
 
-  const value = process.env[name];
+  const value = process.env[name];
 
 
 
@@ -246,15 +246,15 @@ function env(name, fallback = "") {
 
 
 
-  return value === undefined || value === null
+  return value === undefined || value === null
 
 
 
-    ? fallback
+    ? fallback
 
 
 
-    : String(value).trim();
+    : String(value).trim();
 
 
 
@@ -270,19 +270,19 @@ function parseAdminIds() {
 
 
 
-  const raw =
+  const raw =
 
 
 
-    env("TELEGRAM_ADMIN_IDS") ||
+    env("TELEGRAM_ADMIN_IDS") ||
 
 
 
-    env("TELEGRAM_ADMIN_ID") ||
+    env("TELEGRAM_ADMIN_ID") ||
 
 
 
-    "";
+    "";
 
 
 
@@ -290,27 +290,27 @@ function parseAdminIds() {
 
 
 
-  return new Set(
+  return new Set(
 
 
 
-    raw
+    raw
 
 
 
-      .split(/[, \t\r\n]+/)
+      .split(/[, \t\r\n]+/)
 
 
 
-      .map((value) => value.trim())
+      .map((value) => value.trim())
 
 
 
-      .filter(Boolean)
+      .filter(Boolean)
 
 
 
-  );
+  );
 
 
 
@@ -326,23 +326,23 @@ function getChatId() {
 
 
 
-  return (
+  return (
 
 
 
-    env("TELEGRAM_RECHARGE_CHAT_ID") ||
+    env("TELEGRAM_RECHARGE_CHAT_ID") ||
 
 
 
-    env("TELEGRAM_ADMIN_CHAT_ID") ||
+    env("TELEGRAM_ADMIN_CHAT_ID") ||
 
 
 
-    env("TELEGRAM_CHAT_ID")
+    env("TELEGRAM_CHAT_ID")
 
 
 
-  );
+  );
 
 
 
@@ -358,19 +358,19 @@ function isConfigured() {
 
 
 
-  return Boolean(
+  return Boolean(
 
 
 
-    env("TELEGRAM_BOT_TOKEN") &&
+    env("TELEGRAM_BOT_TOKEN") &&
 
 
 
-    getChatId()
+    getChatId()
 
 
 
-  );
+  );
 
 
 
@@ -386,15 +386,15 @@ function isAdmin(userId) {
 
 
 
-  if (!userId) {
+  if (!userId) {
 
 
 
-    return false;
+    return false;
 
 
 
-  }
+  }
 
 
 
@@ -402,7 +402,7 @@ function isAdmin(userId) {
 
 
 
-  const admins = parseAdminIds();
+  const admins = parseAdminIds();
 
 
 
@@ -410,15 +410,15 @@ function isAdmin(userId) {
 
 
 
-  if (admins.size > 0) {
+  if (admins.size > 0) {
 
 
 
-    return admins.has(String(userId));
+    return admins.has(String(userId));
 
 
 
-  }
+  }
 
 
 
@@ -426,31 +426,31 @@ function isAdmin(userId) {
 
 
 
-  /*
+  /*
 
 
 
-   * If TELEGRAM_ADMIN_IDS is not configured, do not silently
+   * If TELEGRAM_ADMIN_IDS is not configured, do not silently
 
 
 
-   * authorize arbitrary users. TELEGRAM_ADMIN_ID should be used
+   * authorize arbitrary users. TELEGRAM_ADMIN_ID should be used
 
 
 
-   * explicitly for a single-admin fallback.
+   * explicitly for a single-admin fallback.
 
 
 
-   */
+   */
 
 
 
-  const singleAdmin =
+  const singleAdmin =
 
 
 
-    env("TELEGRAM_ADMIN_ID");
+    env("TELEGRAM_ADMIN_ID");
 
 
 
@@ -458,19 +458,19 @@ function isAdmin(userId) {
 
 
 
-  return Boolean(
+  return Boolean(
 
 
 
-    singleAdmin &&
+    singleAdmin &&
 
 
 
-    String(userId) === String(singleAdmin)
+    String(userId) === String(singleAdmin)
 
 
 
-  );
+  );
 
 
 
@@ -486,7 +486,7 @@ function money(value) {
 
 
 
-  const amount = Number(value || 0);
+  const amount = Number(value || 0);
 
 
 
@@ -494,23 +494,23 @@ function money(value) {
 
 
 
-  return new Intl.NumberFormat("en-UG", {
+  return new Intl.NumberFormat("en-UG", {
 
 
 
-    style: "currency",
+    style: "currency",
 
 
 
-    currency: "UGX",
+    currency: "UGX",
 
 
 
-    maximumFractionDigits: 0,
+    maximumFractionDigits: 0,
 
 
 
-  }).format(amount);
+  }).format(amount);
 
 
 
@@ -526,19 +526,19 @@ function escapeHtml(value) {
 
 
 
-  return String(value ?? "")
+  return String(value ?? "")
 
 
 
-    .replace(/&/g, "&amp;")
+    .replace(/&/g, "&amp;")
 
 
 
-    .replace(/</g, "&lt;")
+    .replace(/</g, "&lt;")
 
 
 
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;");
 
 
 
@@ -554,63 +554,63 @@ function normalizeRechargeRecord(input) {
 
 
 
-  /*
+  /*
 
 
 
-   * getRechargeForAdmin() returns:
+   * getRechargeForAdmin() returns:
 
 
 
-   *   { success: true, recharge: {...} }
+   *   { success: true, recharge: {...} }
 
 
 
-   *
+   *
 
 
 
-   * submitRecharge()/other callers may pass the record itself.
+   * submitRecharge()/other callers may pass the record itself.
 
 
 
-   * Normalize both shapes so the Telegram layer never renders
+   * Normalize both shapes so the Telegram layer never renders
 
 
 
-   * undefined fields.
+   * undefined fields.
 
 
 
-   */
+   */
 
 
 
-  if (
+  if (
 
 
 
-    input &&
+    input &&
 
 
 
-    input.recharge &&
+    input.recharge &&
 
 
 
-    typeof input.recharge === "object"
+    typeof input.recharge === "object"
 
 
 
-  ) {
+  ) {
 
 
 
-    return input.recharge;
+    return input.recharge;
 
 
 
-  }
+  }
 
 
 
@@ -618,7 +618,7 @@ function normalizeRechargeRecord(input) {
 
 
 
-  return input || {};
+  return input || {};
 
 
 
@@ -634,11 +634,11 @@ function rechargeIdOf(recharge) {
 
 
 
-  const record =
+  const record =
 
 
 
-    normalizeRechargeRecord(recharge);
+    normalizeRechargeRecord(recharge);
 
 
 
@@ -646,27 +646,27 @@ function rechargeIdOf(recharge) {
 
 
 
-  return (
+  return (
 
 
 
-    record.rechargeId ||
+    record.rechargeId ||
 
 
 
-    record.id ||
+    record.id ||
 
 
 
-    record.depositId ||
+    record.depositId ||
 
 
 
-    ""
+    ""
 
 
 
-  );
+  );
 
 
 
@@ -682,11 +682,11 @@ function rechargeText(input) {
 
 
 
-  const recharge =
+  const recharge =
 
 
 
-    normalizeRechargeRecord(input);
+    normalizeRechargeRecord(input);
 
 
 
@@ -694,11 +694,11 @@ function rechargeText(input) {
 
 
 
-  const rechargeId =
+  const rechargeId =
 
 
 
-    rechargeIdOf(recharge);
+    rechargeIdOf(recharge);
 
 
 
@@ -706,19 +706,19 @@ function rechargeText(input) {
 
 
 
-  const network =
+  const network =
 
 
 
-    escapeHtml(
+    escapeHtml(
 
 
 
-      recharge.network || "UNKNOWN"
+      recharge.network || "UNKNOWN"
 
 
 
-    );
+    );
 
 
 
@@ -726,23 +726,23 @@ function rechargeText(input) {
 
 
 
-  const senderName =
+  const senderName =
 
 
 
-    escapeHtml(
+    escapeHtml(
 
 
 
-      recharge.senderName ||
+      recharge.senderName ||
 
 
 
-      "Not supplied"
+      "Not supplied"
 
 
 
-    );
+    );
 
 
 
@@ -750,27 +750,27 @@ function rechargeText(input) {
 
 
 
-  const transactionId =
+  const transactionId =
 
 
 
-    escapeHtml(
+    escapeHtml(
 
 
 
-      recharge.transactionId ||
+      recharge.transactionId ||
 
 
 
-      recharge.txid ||
+      recharge.txid ||
 
 
 
-      "Not supplied"
+      "Not supplied"
 
 
 
-    );
+    );
 
 
 
@@ -778,23 +778,23 @@ function rechargeText(input) {
 
 
 
-  const userId =
+  const userId =
 
 
 
-    escapeHtml(
+    escapeHtml(
 
 
 
-      recharge.userId ||
+      recharge.userId ||
 
 
 
-      "Unknown"
+      "Unknown"
 
 
 
-    );
+    );
 
 
 
@@ -802,23 +802,23 @@ function rechargeText(input) {
 
 
 
-  const status =
+  const status =
 
 
 
-    escapeHtml(
+    escapeHtml(
 
 
 
-      recharge.status ||
+      recharge.status ||
 
 
 
-      "UNKNOWN"
+      "UNKNOWN"
 
 
 
-    );
+    );
 
 
 
@@ -826,99 +826,99 @@ function rechargeText(input) {
 
 
 
-  return [
+  return [
 
 
 
-    "💰 <b>SAINT CRYPTO RECHARGE</b>",
+    "💰 <b>SAINT CRYPTO RECHARGE</b>",
 
 
 
-    "",
+    "",
 
 
 
-    `🆔 <b>ID:</b> <code>${escapeHtml(
+    `🆔 <b>ID:</b> <code>${escapeHtml(
 
 
 
-      rechargeId || "UNKNOWN"
+      rechargeId || "UNKNOWN"
 
 
 
-    )}</code>`,
+    )}</code>`,
 
 
 
-    `👤 <b>User:</b> <code>${userId}</code>`,
+    `👤 <b>User:</b> <code>${userId}</code>`,
 
 
 
-    "",
+    "",
 
 
 
-    `💵 <b>Amount:</b> ${money(
+    `💵 <b>Amount:</b> ${money(
 
 
 
-      recharge.amountUgx ??
+      recharge.amountUgx ??
 
 
 
-      recharge.amount
+      recharge.amount
 
 
 
-    )}`,
+    )}`,
 
 
 
-    `📱 <b>Network:</b> ${network}`,
+    `📱 <b>Network:</b> ${network}`,
 
 
 
-    `👤 <b>Sender:</b> ${senderName}`,
+    `👤 <b>Sender:</b> ${senderName}`,
 
 
 
-    `🧾 <b>Transaction ID:</b> <code>${transactionId}</code>`,
+    `🧾 <b>Transaction ID:</b> <code>${transactionId}</code>`,
 
 
 
-    "",
+    "",
 
 
 
-    `📌 <b>Status:</b> ${status}`,
+    `📌 <b>Status:</b> ${status}`,
 
 
 
-    `📜 <b>Terms accepted:</b> ${
+    `📜 <b>Terms accepted:</b> ${
 
 
 
-      recharge.termsAccepted ? "YES" : "NO"
+      recharge.termsAccepted ? "YES" : "NO"
 
 
 
-    }`,
+    }`,
 
 
 
-    "",
+    "",
 
 
 
-    "⚠️ Verify the Mobile Money transaction before approving.",
+    "⚠️ Verify the Mobile Money transaction before approving.",
 
 
 
-    "Approval credits the amount to <b>locked trading capital</b>.",
+    "Approval credits the amount to <b>locked trading capital</b>.",
 
 
 
-  ].join("\n");
+  ].join("\n");
 
 
 
@@ -934,67 +934,67 @@ function rechargeKeyboard(rechargeId) {
 
 
 
-  return {
+  return {
 
 
 
-    inline_keyboard: [
+    inline_keyboard: [
 
 
 
-      [
+      [
 
 
 
-        {
+        {
 
 
 
-          text: "✅ APPROVE RECHARGE",
+          text: "✅ APPROVE RECHARGE",
 
 
 
-          callback_data:
+          callback_data:
 
 
 
-            `dep_approve:${rechargeId}`,
+            `dep_approve:${rechargeId}`,
 
 
 
-        },
+        },
 
 
 
-        {
+        {
 
 
 
-          text: "❌ REJECT",
+          text: "❌ REJECT",
 
 
 
-          callback_data:
+          callback_data:
 
 
 
-            `dep_reject:${rechargeId}`,
+            `dep_reject:${rechargeId}`,
 
 
 
-        },
+        },
 
 
 
-      ],
+      ],
 
 
 
-    ],
+    ],
 
 
 
-  };
+  };
 
 
 
@@ -1010,7 +1010,7 @@ async function sendRechargeForReview(
 
 
 
-  rechargeInput
+  rechargeInput
 
 
 
@@ -1018,19 +1018,19 @@ async function sendRechargeForReview(
 
 
 
-  const recharge =
+  const recharge =
 
 
 
-    normalizeRechargeRecord(
+    normalizeRechargeRecord(
 
 
 
-      rechargeInput
+      rechargeInput
 
 
 
-    );
+    );
 
 
 
@@ -1038,11 +1038,11 @@ async function sendRechargeForReview(
 
 
 
-  const rechargeId =
+  const rechargeId =
 
 
 
-    rechargeIdOf(recharge);
+    rechargeIdOf(recharge);
 
 
 
@@ -1050,27 +1050,27 @@ async function sendRechargeForReview(
 
 
 
-  if (!rechargeId) {
+  if (!rechargeId) {
 
 
 
-    return {
+    return {
 
 
 
-      sent: false,
+      sent: false,
 
 
 
-      reason: "RECHARGE_ID_MISSING",
+      reason: "RECHARGE_ID_MISSING",
 
 
 
-    };
+    };
 
 
 
-  }
+  }
 
 
 
@@ -1078,27 +1078,27 @@ async function sendRechargeForReview(
 
 
 
-  if (!bot || !getChatId()) {
+  if (!bot || !getChatId()) {
 
 
 
-    return {
+    return {
 
 
 
-      sent: false,
+      sent: false,
 
 
 
-      reason: "TELEGRAM_NOT_CONFIGURED",
+      reason: "TELEGRAM_NOT_CONFIGURED",
 
 
 
-    };
+    };
 
 
 
-  }
+  }
 
 
 
@@ -1106,47 +1106,47 @@ async function sendRechargeForReview(
 
 
 
-  const message =
+  const message =
 
 
 
-    await bot.sendMessage(
+    await bot.sendMessage(
 
 
 
-      getChatId(),
+      getChatId(),
 
 
 
-      rechargeText(recharge),
+      rechargeText(recharge),
 
 
 
-      {
+      {
 
 
 
-        parse_mode: "HTML",
+        parse_mode: "HTML",
 
 
 
-        disable_web_page_preview: true,
+        disable_web_page_preview: true,
 
 
 
-        reply_markup:
+        reply_markup:
 
 
 
-          rechargeKeyboard(rechargeId),
+          rechargeKeyboard(rechargeId),
 
 
 
-      }
+      }
 
 
 
-    );
+    );
 
 
 
@@ -1154,31 +1154,31 @@ async function sendRechargeForReview(
 
 
 
-  return {
+  return {
 
 
 
-    sent: true,
+    sent: true,
 
 
 
-    messageId:
+    messageId:
 
 
 
-      message?.message_id || null,
+      message?.message_id || null,
 
 
 
-    chatId: getChatId(),
+    chatId: getChatId(),
 
 
 
-    rechargeId,
+    rechargeId,
 
 
 
-  };
+  };
 
 
 
@@ -1194,15 +1194,15 @@ async function safeAnswerCallback(
 
 
 
-  queryId,
+  queryId,
 
 
 
-  text,
+  text,
 
 
 
-  showAlert = false
+  showAlert = false
 
 
 
@@ -1210,79 +1210,79 @@ async function safeAnswerCallback(
 
 
 
-  try {
+  try {
 
 
 
-    if (bot && queryId) {
+    if (bot && queryId) {
 
 
 
-      await bot.answerCallbackQuery(
+      await bot.answerCallbackQuery(
 
 
 
-        queryId,
+        queryId,
 
 
 
-        {
+        {
 
 
 
-          text: String(text || "").slice(
+          text: String(text || "").slice(
 
 
 
-            0,
+            0,
 
 
 
-            200
+            200
 
 
 
-          ),
+          ),
 
 
 
-          show_alert: showAlert,
+          show_alert: showAlert,
 
 
 
-        }
+        }
 
 
 
-      );
+      );
 
 
 
-    }
+    }
 
 
 
-  } catch (error) {
+  } catch (error) {
 
 
 
-    console.error(
+    console.error(
 
 
 
-      "[telegram recharge] callback answer failed:",
+      "[telegram recharge] callback answer failed:",
 
 
 
-      error?.message || error
+      error?.message || error
 
 
 
-    );
+    );
 
 
 
-  }
+  }
 
 
 
@@ -1298,15 +1298,15 @@ async function editRechargeMessage(
 
 
 
-  chatId,
+  chatId,
 
 
 
-  messageId,
+  messageId,
 
 
 
-  text
+  text
 
 
 
@@ -1314,15 +1314,15 @@ async function editRechargeMessage(
 
 
 
-  if (!bot || !chatId || !messageId) {
+  if (!bot || !chatId || !messageId) {
 
 
 
-    return;
+    return;
 
 
 
-  }
+  }
 
 
 
@@ -1330,115 +1330,115 @@ async function editRechargeMessage(
 
 
 
-  try {
+  try {
 
 
 
-    await bot.editMessageText(
+    await bot.editMessageText(
 
 
 
-      text,
+      text,
 
 
 
-      {
+      {
 
 
 
-        chat_id: chatId,
+        chat_id: chatId,
 
 
 
-        message_id: messageId,
+        message_id: messageId,
 
 
 
-        parse_mode: "HTML",
+        parse_mode: "HTML",
 
 
 
-        disable_web_page_preview: true,
+        disable_web_page_preview: true,
 
 
 
-      }
+      }
 
 
 
-    );
+    );
 
 
 
-  } catch (error) {
+  } catch (error) {
 
 
 
-    /*
+    /*
 
 
 
-     * Telegram may return "message is not modified" if an
+     * Telegram may return "message is not modified" if an
 
 
 
-     * identical update is attempted. This is not a fatal error.
+     * identical update is attempted. This is not a fatal error.
 
 
 
-     */
+     */
 
 
 
-    if (
+    if (
 
 
 
-      !String(
+      !String(
 
 
 
-        error?.message || ""
+        error?.message || ""
 
 
 
-      )
+      )
 
 
 
-        .toLowerCase()
+        .toLowerCase()
 
 
 
-        .includes("message is not modified")
+        .includes("message is not modified")
 
 
 
-    ) {
+    ) {
 
 
 
-      console.error(
+      console.error(
 
 
 
-        "[telegram recharge] message edit failed:",
+        "[telegram recharge] message edit failed:",
 
 
 
-        error?.message || error
+        error?.message || error
 
 
 
-      );
+      );
 
 
 
-    }
+    }
 
 
 
-  }
+  }
 
 
 
@@ -1454,7 +1454,7 @@ async function fetchAdminRecharge(
 
 
 
-  rechargeId
+  rechargeId
 
 
 
@@ -1462,59 +1462,39 @@ async function fetchAdminRecharge(
 
 
 
-  if (
+  if (
 
 
 
-    !depositService ||
+    !depositService ||
 
 
 
-    typeof depositService.getRechargeForAdmin !==
+    typeof depositService.getRechargeForAdmin !==
 
 
 
-      "function"
+      "function"
 
 
 
-  ) {
+  ) {
 
 
 
-    throw new Error(
+    throw new Error(
 
 
 
-      "Recharge admin lookup service is unavailable."
+      "Recharge admin lookup service is unavailable."
 
 
 
-    );
+    );
 
 
 
-  }
-
-
-
-
-
-
-
-  const result =
-
-
-
-    await depositService.getRechargeForAdmin(
-
-
-
-      rechargeId
-
-
-
-    );
+  }
 
 
 
@@ -1522,15 +1502,35 @@ async function fetchAdminRecharge(
 
 
 
-  return normalizeRechargeRecord(
+  const result =
 
 
 
-    result
+    await depositService.getRechargeForAdmin(
 
 
 
-  );
+      rechargeId
+
+
+
+    );
+
+
+
+
+
+
+
+  return normalizeRechargeRecord(
+
+
+
+    result
+
+
+
+  );
 
 
 
@@ -1546,11 +1546,11 @@ async function handleApprove(
 
 
 
-  query,
+  query,
 
 
 
-  rechargeId
+  rechargeId
 
 
 
@@ -1558,23 +1558,23 @@ async function handleApprove(
 
 
 
-  try {
+  try {
 
 
 
-    const recharge =
+    const recharge =
 
 
 
-      await fetchAdminRecharge(
+      await fetchAdminRecharge(
 
 
 
-        rechargeId
+        rechargeId
 
 
 
-      );
+      );
 
 
 
@@ -1582,35 +1582,35 @@ async function handleApprove(
 
 
 
-    if (!recharge?.rechargeId) {
+    if (!recharge?.rechargeId) {
 
 
 
-      await safeAnswerCallback(
+      await safeAnswerCallback(
 
 
 
-        query.id,
+        query.id,
 
 
 
-        "Recharge not found.",
+        "Recharge not found.",
 
 
 
-        true
+        true
 
 
 
-      );
+      );
 
 
 
-      return;
+      return;
 
 
 
-    }
+    }
 
 
 
@@ -1618,47 +1618,47 @@ async function handleApprove(
 
 
 
-    if (
+    if (
 
 
 
-      recharge.status !==
+      recharge.status !==
 
 
 
-      "PENDING_ADMIN_REVIEW"
+      "PENDING_ADMIN_REVIEW"
 
 
 
-    ) {
+    ) {
 
 
 
-      await safeAnswerCallback(
+      await safeAnswerCallback(
 
 
 
-        query.id,
+        query.id,
 
 
 
-        `Cannot approve: ${recharge.status || "UNKNOWN"}`,
+        `Cannot approve: ${recharge.status || "UNKNOWN"}`,
 
 
 
-        true
+        true
 
 
 
-      );
+      );
 
 
 
-      return;
+      return;
 
 
 
-    }
+    }
 
 
 
@@ -1666,23 +1666,23 @@ async function handleApprove(
 
 
 
-    const result =
+    const result =
 
 
 
-      await depositService.approveRecharge(
+      await depositService.approveRecharge(
 
 
 
-        rechargeId,
+        rechargeId,
 
 
 
-        String(query.from?.id || "")
+        String(query.from?.id || "")
 
 
 
-      );
+      );
 
 
 
@@ -1690,27 +1690,27 @@ async function handleApprove(
 
 
 
-    /*
+    /*
 
 
 
-     * Re-read the record after approval so the edited Telegram
+     * Re-read the record after approval so the edited Telegram
 
 
 
-     * message contains the real recharge details, not the small
+     * message contains the real recharge details, not the small
 
 
 
-     * service-result object.
+     * service-result object.
 
 
 
-     */
+     */
 
 
 
-    let finalRecharge = recharge;
+    let finalRecharge = recharge;
 
 
 
@@ -1718,47 +1718,47 @@ async function handleApprove(
 
 
 
-    try {
+    try {
 
 
 
-      finalRecharge =
+      finalRecharge =
 
 
 
-        await fetchAdminRecharge(
+        await fetchAdminRecharge(
 
 
 
-          rechargeId
+          rechargeId
 
 
 
-        );
+        );
 
 
 
-    } catch (refreshError) {
+    } catch (refreshError) {
 
 
 
-      console.error(
+      console.error(
 
 
 
-        "[telegram recharge] post-approval refresh failed:",
+        "[telegram recharge] post-approval refresh failed:",
 
 
 
-        refreshError?.message || refreshError
+        refreshError?.message || refreshError
 
 
 
-      );
+      );
 
 
 
-    }
+    }
 
 
 
@@ -1766,27 +1766,27 @@ async function handleApprove(
 
 
 
-    await safeAnswerCallback(
+    await safeAnswerCallback(
 
 
 
-      query.id,
+      query.id,
 
 
 
-      result?.alreadyApproved
+      result?.alreadyApproved
 
 
 
-        ? "Recharge was already approved."
+        ? "Recharge was already approved."
 
 
 
-        : "Recharge approved. Locked trading capital credited."
+        : "Recharge approved. Locked trading capital credited."
 
 
 
-    );
+    );
 
 
 
@@ -1794,31 +1794,31 @@ async function handleApprove(
 
 
 
-    if (bot && query.message) {
+    if (bot && query.message) {
 
 
 
-      const approvedText = [
+      const approvedText = [
 
 
 
-        rechargeText(finalRecharge),
+        rechargeText(finalRecharge),
 
 
 
-        "",
+        "",
 
 
 
-        "🟢 <b>APPROVED</b>",
+        "🟢 <b>APPROVED</b>",
 
 
 
-        "Locked trading capital has been credited to the user's ledger.",
+        "Locked trading capital has been credited to the user's ledger.",
 
 
 
-      ].join("\n");
+      ].join("\n");
 
 
 
@@ -1826,47 +1826,47 @@ async function handleApprove(
 
 
 
-      await editRechargeMessage(
+      await editRechargeMessage(
 
 
 
-        query.message.chat.id,
+        query.message.chat.id,
 
 
 
-        query.message.message_id,
+        query.message.message_id,
 
 
 
-        approvedText
+        approvedText
 
 
 
-      );
+      );
 
 
 
-    }
+    }
 
 
 
-  } catch (error) {
+  } catch (error) {
 
 
 
-    console.error(
+    console.error(
 
 
 
-      "[telegram recharge] approval failed:",
+      "[telegram recharge] approval failed:",
 
 
 
-      error?.stack || error
+      error?.stack || error
 
 
 
-    );
+    );
 
 
 
@@ -1874,31 +1874,31 @@ async function handleApprove(
 
 
 
-    await safeAnswerCallback(
+    await safeAnswerCallback(
 
 
 
-      query.id,
+      query.id,
 
 
 
-      error?.message ||
+      error?.message ||
 
 
 
-        "Could not approve recharge.",
+        "Could not approve recharge.",
 
 
 
-      true
+      true
 
 
 
-    );
+    );
 
 
 
-  }
+  }
 
 
 
@@ -1914,11 +1914,11 @@ async function handleReject(
 
 
 
-  query,
+  query,
 
 
 
-  rechargeId
+  rechargeId
 
 
 
@@ -1926,23 +1926,23 @@ async function handleReject(
 
 
 
-  try {
+  try {
 
 
 
-    const recharge =
+    const recharge =
 
 
 
-      await fetchAdminRecharge(
+      await fetchAdminRecharge(
 
 
 
-        rechargeId
+        rechargeId
 
 
 
-      );
+      );
 
 
 
@@ -1950,35 +1950,35 @@ async function handleReject(
 
 
 
-    if (!recharge?.rechargeId) {
+    if (!recharge?.rechargeId) {
 
 
 
-      await safeAnswerCallback(
+      await safeAnswerCallback(
 
 
 
-        query.id,
+        query.id,
 
 
 
-        "Recharge not found.",
+        "Recharge not found.",
 
 
 
-        true
+        true
 
 
 
-      );
+      );
 
 
 
-      return;
+      return;
 
 
 
-    }
+    }
 
 
 
@@ -1986,47 +1986,47 @@ async function handleReject(
 
 
 
-    if (
+    if (
 
 
 
-      recharge.status !==
+      recharge.status !==
 
 
 
-      "PENDING_ADMIN_REVIEW"
+      "PENDING_ADMIN_REVIEW"
 
 
 
-    ) {
+    ) {
 
 
 
-      await safeAnswerCallback(
+      await safeAnswerCallback(
 
 
 
-        query.id,
+        query.id,
 
 
 
-        `Cannot reject: ${recharge.status || "UNKNOWN"}`,
+        `Cannot reject: ${recharge.status || "UNKNOWN"}`,
 
 
 
-        true
+        true
 
 
 
-      );
+      );
 
 
 
-      return;
+      return;
 
 
 
-    }
+    }
 
 
 
@@ -2034,27 +2034,27 @@ async function handleReject(
 
 
 
-    const result =
+    const result =
 
 
 
-      await depositService.rejectRecharge(
+      await depositService.rejectRecharge(
 
 
 
-        rechargeId,
+        rechargeId,
 
 
 
-        String(query.from?.id || ""),
+        String(query.from?.id || ""),
 
 
 
-        "Rejected by Telegram admin."
+        "Rejected by Telegram admin."
 
 
 
-      );
+      );
 
 
 
@@ -2062,7 +2062,7 @@ async function handleReject(
 
 
 
-    let finalRecharge = recharge;
+    let finalRecharge = recharge;
 
 
 
@@ -2070,47 +2070,47 @@ async function handleReject(
 
 
 
-    try {
+    try {
 
 
 
-      finalRecharge =
+      finalRecharge =
 
 
 
-        await fetchAdminRecharge(
+        await fetchAdminRecharge(
 
 
 
-          rechargeId
+          rechargeId
 
 
 
-        );
+        );
 
 
 
-    } catch (refreshError) {
+    } catch (refreshError) {
 
 
 
-      console.error(
+      console.error(
 
 
 
-        "[telegram recharge] post-rejection refresh failed:",
+        "[telegram recharge] post-rejection refresh failed:",
 
 
 
-        refreshError?.message || refreshError
+        refreshError?.message || refreshError
 
 
 
-      );
+      );
 
 
 
-    }
+    }
 
 
 
@@ -2118,27 +2118,27 @@ async function handleReject(
 
 
 
-    await safeAnswerCallback(
+    await safeAnswerCallback(
 
 
 
-      query.id,
+      query.id,
 
 
 
-      result?.alreadyRejected
+      result?.alreadyRejected
 
 
 
-        ? "Recharge was already rejected."
+        ? "Recharge was already rejected."
 
 
 
-        : "Recharge rejected. No ledger credit was made."
+        : "Recharge rejected. No ledger credit was made."
 
 
 
-    );
+    );
 
 
 
@@ -2146,31 +2146,31 @@ async function handleReject(
 
 
 
-    if (bot && query.message) {
+    if (bot && query.message) {
 
 
 
-      const rejectedText = [
+      const rejectedText = [
 
 
 
-        rechargeText(finalRecharge),
+        rechargeText(finalRecharge),
 
 
 
-        "",
+        "",
 
 
 
-        "🔴 <b>REJECTED</b>",
+        "🔴 <b>REJECTED</b>",
 
 
 
-        "No locked trading capital was credited.",
+        "No locked trading capital was credited.",
 
 
 
-      ].join("\n");
+      ].join("\n");
 
 
 
@@ -2178,47 +2178,47 @@ async function handleReject(
 
 
 
-      await editRechargeMessage(
+      await editRechargeMessage(
 
 
 
-        query.message.chat.id,
+        query.message.chat.id,
 
 
 
-        query.message.message_id,
+        query.message.message_id,
 
 
 
-        rejectedText
+        rejectedText
 
 
 
-      );
+      );
 
 
 
-    }
+    }
 
 
 
-  } catch (error) {
+  } catch (error) {
 
 
 
-    console.error(
+    console.error(
 
 
 
-      "[telegram recharge] rejection failed:",
+      "[telegram recharge] rejection failed:",
 
 
 
-      error?.stack || error
+      error?.stack || error
 
 
 
-    );
+    );
 
 
 
@@ -2226,31 +2226,31 @@ async function handleReject(
 
 
 
-    await safeAnswerCallback(
+    await safeAnswerCallback(
 
 
 
-      query.id,
+      query.id,
 
 
 
-      error?.message ||
+      error?.message ||
 
 
 
-        "Could not reject recharge.",
+        "Could not reject recharge.",
 
 
 
-      true
+      true
 
 
 
-    );
+    );
 
 
 
-  }
+  }
 
 
 
@@ -2266,15 +2266,15 @@ function registerHandlers() {
 
 
 
-  if (!bot) {
+  if (!bot) {
 
 
 
-    return;
+    return;
 
 
 
-  }
+  }
 
 
 
@@ -2282,51 +2282,51 @@ function registerHandlers() {
 
 
 
-  bot.on(
+  bot.on(
 
 
 
-    "callback_query",
+    "callback_query",
 
 
 
-    async (ctx) => {
+    async (ctx) => {
 
 
 
-      const query =
+      const query =
 
 
 
-        ctx?.callbackQuery
+        ctx?.callbackQuery
 
 
 
-          ? {
+          ? {
 
 
 
-              id: ctx.callbackQuery.id,
+              id: ctx.callbackQuery.id,
 
 
 
-              from: ctx.from || ctx.callbackQuery.from,
+              from: ctx.from || ctx.callbackQuery.from,
 
 
 
-              data: ctx.callbackQuery.data,
+              data: ctx.callbackQuery.data,
 
 
 
-              message: ctx.callbackQuery.message,
+              message: ctx.callbackQuery.message,
 
 
 
-            }
+            }
 
 
 
-          : ctx;
+          : ctx;
 
 
 
@@ -2334,47 +2334,47 @@ function registerHandlers() {
 
 
 
-      try {
+      try {
 
 
 
-        if (
+        if (
 
 
 
-          !isAdmin(query.from?.id)
+          !isAdmin(query.from?.id)
 
 
 
-        ) {
+        ) {
 
 
 
-          await safeAnswerCallback(
+          await safeAnswerCallback(
 
 
 
-            query.id,
+            query.id,
 
 
 
-            "You are not authorized for admin actions.",
+            "You are not authorized for admin actions.",
 
 
 
-            true
+            true
 
 
 
-          );
+          );
 
 
 
-          return;
+          return;
 
 
 
-        }
+        }
 
 
 
@@ -2382,11 +2382,11 @@ function registerHandlers() {
 
 
 
-        const data =
+        const data =
 
 
 
-          String(query.data || "");
+          String(query.data || "");
 
 
 
@@ -2394,39 +2394,39 @@ function registerHandlers() {
 
 
 
-        if (
+        if (
 
 
 
-          data.startsWith(
+          data.startsWith(
 
 
 
-            "dep_approve:"
+            "dep_approve:"
 
 
 
-          )
+          )
 
 
 
-        ) {
+        ) {
 
 
 
-          const rechargeId =
+          const rechargeId =
 
 
 
-            data.substring(
+            data.substring(
 
 
 
-              "dep_approve:".length
+              "dep_approve:".length
 
 
 
-            );
+            );
 
 
 
@@ -2434,35 +2434,35 @@ function registerHandlers() {
 
 
 
-          if (!rechargeId) {
+          if (!rechargeId) {
 
 
 
-            await safeAnswerCallback(
+            await safeAnswerCallback(
 
 
 
-              query.id,
+              query.id,
 
 
 
-              "Recharge ID is missing.",
+              "Recharge ID is missing.",
 
 
 
-              true
+              true
 
 
 
-            );
+            );
 
 
 
-            return;
+            return;
 
 
 
-          }
+          }
 
 
 
@@ -2470,27 +2470,27 @@ function registerHandlers() {
 
 
 
-          await handleApprove(
+          await handleApprove(
 
 
 
-            query,
+            query,
 
 
 
-            rechargeId
+            rechargeId
 
 
 
-          );
+          );
 
 
 
-          return;
+          return;
 
 
 
-        }
+        }
 
 
 
@@ -2498,39 +2498,39 @@ function registerHandlers() {
 
 
 
-        if (
+        if (
 
 
 
-          data.startsWith(
+          data.startsWith(
 
 
 
-            "dep_reject:"
+            "dep_reject:"
 
 
 
-          )
+          )
 
 
 
-        ) {
+        ) {
 
 
 
-          const rechargeId =
+          const rechargeId =
 
 
 
-            data.substring(
+            data.substring(
 
 
 
-              "dep_reject:".length
+              "dep_reject:".length
 
 
 
-            );
+            );
 
 
 
@@ -2538,35 +2538,35 @@ function registerHandlers() {
 
 
 
-          if (!rechargeId) {
+          if (!rechargeId) {
 
 
 
-            await safeAnswerCallback(
+            await safeAnswerCallback(
 
 
 
-              query.id,
+              query.id,
 
 
 
-              "Recharge ID is missing.",
+              "Recharge ID is missing.",
 
 
 
-              true
+              true
 
 
 
-            );
+            );
 
 
 
-            return;
+            return;
 
 
 
-          }
+          }
 
 
 
@@ -2574,27 +2574,27 @@ function registerHandlers() {
 
 
 
-          await handleReject(
+          await handleReject(
 
 
 
-            query,
+            query,
 
 
 
-            rechargeId
+            rechargeId
 
 
 
-          );
+          );
 
 
 
-          return;
+          return;
 
 
 
-        }
+        }
 
 
 
@@ -2602,43 +2602,43 @@ function registerHandlers() {
 
 
 
-        await safeAnswerCallback(
+        await safeAnswerCallback(
 
 
 
-          query.id,
+          query.id,
 
 
 
-          "Unknown recharge action.",
+          "Unknown recharge action.",
 
 
 
-          true
+          true
 
 
 
-        );
+        );
 
 
 
-      } catch (error) {
+      } catch (error) {
 
 
 
-        console.error(
+        console.error(
 
 
 
-          "[telegram recharge] callback handler error:",
+          "[telegram recharge] callback handler error:",
 
 
 
-          error?.stack || error
+          error?.stack || error
 
 
 
-        );
+        );
 
 
 
@@ -2646,35 +2646,35 @@ function registerHandlers() {
 
 
 
-        await safeAnswerCallback(
+        await safeAnswerCallback(
 
 
 
-          query.id,
+          query.id,
 
 
 
-          "Recharge admin action failed.",
+          "Recharge admin action failed.",
 
 
 
-          true
+          true
 
 
 
-        );
+        );
 
 
 
-      }
+      }
 
 
 
-    }
+    }
 
 
 
-  );
+  );
 
 
 
@@ -2690,35 +2690,35 @@ async function startTelegramRechargeBot() {
 
 
 
-  if (started) {
+  if (started) {
 
 
 
-    return {
+    return {
 
 
 
-      started: true,
+      started: true,
 
 
 
-      alreadyRunning: true,
+      alreadyRunning: true,
 
 
 
-      polling,
+      polling,
 
 
 
-      configured: isConfigured(),
+      configured: isConfigured(),
 
 
 
-    };
+    };
 
 
 
-  }
+  }
 
 
 
@@ -2726,27 +2726,27 @@ async function startTelegramRechargeBot() {
 
 
 
-  if (!TelegramBot) {
+  if (!TelegramBot) {
 
 
 
-    console.error(
+    console.error(
 
 
 
-      "[telegram recharge] Telegram package could not be initialized:",
+      "[telegram recharge] Telegram package could not be initialized:",
 
 
 
-      telegramPackageError?.message ||
+      telegramPackageError?.message ||
 
 
 
-        "Unknown Telegram package error."
+        "Unknown Telegram package error."
 
 
 
-    );
+    );
 
 
 
@@ -2754,39 +2754,39 @@ async function startTelegramRechargeBot() {
 
 
 
-    return {
+    return {
 
 
 
-      started: false,
+      started: false,
 
 
 
-      reason:
+      reason:
 
 
 
-        "TELEGRAM_PACKAGE_INVALID",
+        "TELEGRAM_PACKAGE_INVALID",
 
 
 
-      error:
+      error:
 
 
 
-        telegramPackageError?.message ||
+        telegramPackageError?.message ||
 
 
 
-        "node-telegram-bot-api constructor is unavailable.",
+        "node-telegram-bot-api constructor is unavailable.",
 
 
 
-    };
+    };
 
 
 
-  }
+  }
 
 
 
@@ -2794,11 +2794,11 @@ async function startTelegramRechargeBot() {
 
 
 
-  const token =
+  const token =
 
 
 
-    env("TELEGRAM_BOT_TOKEN");
+    env("TELEGRAM_BOT_TOKEN");
 
 
 
@@ -2806,19 +2806,19 @@ async function startTelegramRechargeBot() {
 
 
 
-  if (!token) {
+  if (!token) {
 
 
 
-    console.warn(
+    console.warn(
 
 
 
-      "[telegram recharge] TELEGRAM_BOT_TOKEN is not configured."
+      "[telegram recharge] TELEGRAM_BOT_TOKEN is not configured."
 
 
 
-    );
+    );
 
 
 
@@ -2826,27 +2826,27 @@ async function startTelegramRechargeBot() {
 
 
 
-    return {
+    return {
 
 
 
-      started: false,
+      started: false,
 
 
 
-      reason:
+      reason:
 
 
 
-        "TELEGRAM_BOT_TOKEN_MISSING",
+        "TELEGRAM_BOT_TOKEN_MISSING",
 
 
 
-    };
+    };
 
 
 
-  }
+  }
 
 
 
@@ -2854,31 +2854,31 @@ async function startTelegramRechargeBot() {
 
 
 
-  if (typeof TelegramBot !== "function") {
+  if (typeof TelegramBot !== "function") {
 
 
 
-    return {
+    return {
 
 
 
-      started: false,
+      started: false,
 
 
 
-      reason:
+      reason:
 
 
 
-        "TELEGRAM_CONSTRUCTOR_UNAVAILABLE",
+        "TELEGRAM_CONSTRUCTOR_UNAVAILABLE",
 
 
 
-    };
+    };
 
 
 
-  }
+  }
 
 
 
@@ -2886,11 +2886,11 @@ async function startTelegramRechargeBot() {
 
 
 
-  try {
+  try {
 
 
 
-    bot = new TelegramBot(token);
+    bot = new TelegramBot(token);
 
 
 
@@ -2898,43 +2898,43 @@ async function startTelegramRechargeBot() {
 
 
 
-    // node-telegram-bot-api v2 exposes Telegram API methods through bot.api.
+    // node-telegram-bot-api v2 exposes Telegram API methods through bot.api.
 
 
 
-    // Keep the existing SAINT CRYPTO recharge logic unchanged by providing
+    // Keep the existing SAINT CRYPTO recharge logic unchanged by providing
 
 
 
-    // the small v1-style method surface this file already uses.
+    // the small v1-style method surface this file already uses.
 
 
 
-    if (bot?.api) {
+    if (bot?.api) {
 
 
 
-      bot.sendMessage = (chatId, text, options = {}) =>
+      bot.sendMessage = (chatId, text, options = {}) =>
 
 
 
-        bot.api.sendMessage({
+        bot.api.sendMessage({
 
 
 
-          chat_id: chatId,
+          chat_id: chatId,
 
 
 
-          text,
+          text,
 
 
 
-          ...options,
+          ...options,
 
 
 
-        });
+        });
 
 
 
@@ -2942,23 +2942,23 @@ async function startTelegramRechargeBot() {
 
 
 
-      bot.answerCallbackQuery = (queryId, options = {}) =>
+      bot.answerCallbackQuery = (queryId, options = {}) =>
 
 
 
-        bot.api.answerCallbackQuery({
+        bot.api.answerCallbackQuery({
 
 
 
-          callback_query_id: queryId,
+          callback_query_id: queryId,
 
 
 
-          ...options,
+          ...options,
 
 
 
-        });
+        });
 
 
 
@@ -2966,27 +2966,27 @@ async function startTelegramRechargeBot() {
 
 
 
-      bot.editMessageText = (text, options = {}) =>
+      bot.editMessageText = (text, options = {}) =>
 
 
 
-        bot.api.editMessageText({
+        bot.api.editMessageText({
 
 
 
-          text,
+          text,
 
 
 
-          ...options,
+          ...options,
 
 
 
-        });
+        });
 
 
 
-    }
+    }
 
 
 
@@ -2994,47 +2994,47 @@ async function startTelegramRechargeBot() {
 
 
 
-    console.log(
+    console.log(
 
 
 
-      "[telegram recharge] BOT API READY:",
+      "[telegram recharge] BOT API READY:",
 
 
 
-      JSON.stringify({
+      JSON.stringify({
 
 
 
-        constructor: bot?.constructor?.name || null,
+        constructor: bot?.constructor?.name || null,
 
 
 
-        api: typeof bot?.api,
+        api: typeof bot?.api,
 
 
 
-        sendMessage: typeof bot?.sendMessage,
+        sendMessage: typeof bot?.sendMessage,
 
 
 
-        on: typeof bot?.on,
+        on: typeof bot?.on,
 
 
 
-        answerCallbackQuery: typeof bot?.answerCallbackQuery,
+        answerCallbackQuery: typeof bot?.answerCallbackQuery,
 
 
 
-        editMessageText: typeof bot?.editMessageText,
+        editMessageText: typeof bot?.editMessageText,
 
 
 
-      })
+      })
 
 
 
-    );
+    );
 
 
 
@@ -3042,231 +3042,217 @@ async function startTelegramRechargeBot() {
 
 
 
-    if (typeof bot.startPolling === "function") {
+    // Register handlers before polling starts. Render may begin shutdown while
+    // startPolling() is still pending; waiting first can leave bot null when
+    // the continuation reaches bot.on().
+    polling = true;
+    started = true;
+    registerHandlers();
 
 
 
-      await bot.startPolling();
 
 
 
-    }
 
+    bot.on(
 
 
 
+      "polling_error",
 
 
 
-    polling = true;
+      (error) => {
 
 
 
-    started = true;
+        console.error(
 
 
 
+          "[telegram recharge] polling error:",
 
 
 
+          error?.message || error
 
-    registerHandlers();
 
 
+        );
 
 
 
+      }
 
 
-    bot.on(
 
+    );
 
 
-      "polling_error",
 
 
 
-      (error) => {
 
 
+    bot.on(
 
-        console.error(
 
 
+      "error",
 
-          "[telegram recharge] polling error:",
 
 
+      (error) => {
 
-          error?.message || error
 
 
+        console.error(
 
-        );
 
 
+          "[telegram recharge] bot error:",
 
-      }
 
 
+          error?.message || error
 
-    );
 
 
+        );
 
 
 
+      }
 
 
-    bot.on(
 
+    );
 
 
-      "error",
 
 
 
-      (error) => {
 
 
+    console.log(
 
-        console.error(
 
 
+      "Telegram recharge approval bot started."
 
-          "[telegram recharge] bot error:",
 
 
+    );
 
-          error?.message || error
+    if (bot && typeof bot.startPolling === "function") {
+      Promise.resolve(bot.startPolling()).catch((error) => {
+        console.error(
+          "[telegram recharge] polling start failed:",
+          error?.stack || error
+        );
+      });
+    }
 
 
 
-        );
 
 
 
-      }
 
+    return {
 
 
-    );
 
+      started: true,
 
 
 
+      polling: true,
 
 
 
-    console.log(
+      configured: isConfigured(),
 
 
 
-      "Telegram recharge approval bot started."
+    };
 
 
 
-    );
+  } catch (error) {
 
 
 
+    bot = null;
 
 
 
+    polling = false;
 
-    return {
 
 
+    started = false;
 
-      started: true,
 
 
 
-      polling: true,
 
 
 
-      configured: isConfigured(),
+    console.error(
 
 
 
-    };
+      "[telegram recharge] bot startup failed:",
 
 
 
-  } catch (error) {
+      error?.stack || error
 
 
 
-    bot = null;
+    );
 
 
 
-    polling = false;
 
 
 
-    started = false;
 
+    return {
 
 
 
+      started: false,
 
 
 
-    console.error(
+      reason:
 
 
 
-      "[telegram recharge] bot startup failed:",
+        "TELEGRAM_START_FAILED",
 
 
 
-      error?.stack || error
+      error:
 
 
 
-    );
+        error?.message ||
 
 
 
+        "Unable to start Telegram recharge bot.",
 
 
 
+    };
 
-    return {
 
 
-
-      started: false,
-
-
-
-      reason:
-
-
-
-        "TELEGRAM_START_FAILED",
-
-
-
-      error:
-
-
-
-        error?.message ||
-
-
-
-        "Unable to start Telegram recharge bot.",
-
-
-
-    };
-
-
-
-  }
+  }
 
 
 
@@ -3282,7 +3268,7 @@ async function stopTelegramRechargeBot() {
 
 
 
-  const currentBot = bot;
+  const currentBot = bot;
 
 
 
@@ -3290,15 +3276,15 @@ async function stopTelegramRechargeBot() {
 
 
 
-  if (!currentBot) {
+  if (!currentBot) {
 
 
 
-    started = false;
+    started = false;
 
 
 
-    polling = false;
+    polling = false;
 
 
 
@@ -3306,27 +3292,27 @@ async function stopTelegramRechargeBot() {
 
 
 
-    return {
+    return {
 
 
 
-      stopped: true,
+      stopped: true,
 
 
 
-      wasRunning: false,
+      wasRunning: false,
 
 
 
-      pollingStopped: false,
+      pollingStopped: false,
 
 
 
-    };
+    };
 
 
 
-  }
+  }
 
 
 
@@ -3334,7 +3320,7 @@ async function stopTelegramRechargeBot() {
 
 
 
-  let pollingStopped = false;
+  let pollingStopped = false;
 
 
 
@@ -3342,43 +3328,43 @@ async function stopTelegramRechargeBot() {
 
 
 
-  try {
+  try {
 
 
 
-    if (typeof currentBot.stopPolling === "function") {
+    if (typeof currentBot.stopPolling === "function") {
 
 
 
-      await currentBot.stopPolling();
+      await currentBot.stopPolling();
 
 
 
-      pollingStopped = true;
+      pollingStopped = true;
 
 
 
-    } else if (typeof currentBot.stop === "function") {
+    } else if (typeof currentBot.stop === "function") {
 
 
 
-      await currentBot.stop();
+      await currentBot.stop();
 
 
 
-      pollingStopped = true;
+      pollingStopped = true;
 
 
 
-    }
+    }
 
 
 
-  } catch (error) {
+  } catch (error) {
 
 
 
-    const message = String(error?.message || error || "");
+    const message = String(error?.message || error || "");
 
 
 
@@ -3386,47 +3372,47 @@ async function stopTelegramRechargeBot() {
 
 
 
-    // During a Render/SIGTERM shutdown, some Telegram wrappers expose the
+    // During a Render/SIGTERM shutdown, some Telegram wrappers expose the
 
 
 
-    // polling client without a stopPolling method. The process itself is
+    // polling client without a stopPolling method. The process itself is
 
 
 
-    // already terminating, so do not turn graceful shutdown into a scary
+    // already terminating, so do not turn graceful shutdown into a scary
 
 
 
-    // error log. Report only unexpected cleanup failures.
+    // error log. Report only unexpected cleanup failures.
 
 
 
-    if (!/stopPolling.*not a function/i.test(message)) {
+    if (!/stopPolling.*not a function/i.test(message)) {
 
 
 
-      console.warn(
+      console.warn(
 
 
 
-        "[telegram recharge] graceful stop warning:",
+        "[telegram recharge] graceful stop warning:",
 
 
 
-        message
+        message
 
 
 
-      );
+      );
 
 
 
-    }
+    }
 
 
 
-  }
+  }
 
 
 
@@ -3434,15 +3420,15 @@ async function stopTelegramRechargeBot() {
 
 
 
-  bot = null;
+  bot = null;
 
 
 
-  started = false;
+  started = false;
 
 
 
-  polling = false;
+  polling = false;
 
 
 
@@ -3450,23 +3436,23 @@ async function stopTelegramRechargeBot() {
 
 
 
-  return {
+  return {
 
 
 
-    stopped: true,
+    stopped: true,
 
 
 
-    wasRunning: true,
+    wasRunning: true,
 
 
 
-    pollingStopped,
+    pollingStopped,
 
 
 
-  };
+  };
 
 
 
@@ -3482,7 +3468,7 @@ async function notifyRechargeCreated(
 
 
 
-  rechargeInput
+  rechargeInput
 
 
 
@@ -3490,23 +3476,23 @@ async function notifyRechargeCreated(
 
 
 
-  try {
+  try {
 
 
 
-    const recharge =
+    const recharge =
 
 
 
-      normalizeRechargeRecord(
+      normalizeRechargeRecord(
 
 
 
-        rechargeInput
+        rechargeInput
 
 
 
-      );
+      );
 
 
 
@@ -3514,35 +3500,35 @@ async function notifyRechargeCreated(
 
 
 
-    return await sendRechargeForReview(
+    return await sendRechargeForReview(
 
 
 
-      recharge
+      recharge
 
 
 
-    );
+    );
 
 
 
-  } catch (error) {
+  } catch (error) {
 
 
 
-    console.error(
+    console.error(
 
 
 
-      "[telegram recharge] notification failed:",
+      "[telegram recharge] notification failed:",
 
 
 
-      error?.stack || error
+      error?.stack || error
 
 
 
-    );
+    );
 
 
 
@@ -3550,39 +3536,39 @@ async function notifyRechargeCreated(
 
 
 
-    return {
+    return {
 
 
 
-      sent: false,
+      sent: false,
 
 
 
-      reason:
+      reason:
 
 
 
-        "TELEGRAM_SEND_FAILED",
+        "TELEGRAM_SEND_FAILED",
 
 
 
-      error:
+      error:
 
 
 
-        error?.message ||
+        error?.message ||
 
 
 
-        "Telegram notification failed.",
+        "Telegram notification failed.",
 
 
 
-    };
+    };
 
 
 
-  }
+  }
 
 
 
@@ -3604,43 +3590,43 @@ function getStatus() {
 
 
 
-  return {
+  return {
 
 
 
-    started,
+    started,
 
 
 
-    polling,
+    polling,
 
 
 
-    configured: isConfigured(),
+    configured: isConfigured(),
 
 
 
-    hasBot: Boolean(bot),
+    hasBot: Boolean(bot),
 
 
 
-    adminIdsConfigured:
+    adminIdsConfigured:
 
 
 
-      parseAdminIds().size > 0,
+      parseAdminIds().size > 0,
 
 
 
-    chatIdConfigured:
+    chatIdConfigured:
 
 
 
-      Boolean(getChatId()),
+      Boolean(getChatId()),
 
 
 
-  };
+  };
 
 
 
@@ -3656,23 +3642,23 @@ module.exports = {
 
 
 
-  startTelegramRechargeBot,
+  startTelegramRechargeBot,
 
 
 
-  stopTelegramRechargeBot,
+  stopTelegramRechargeBot,
 
 
 
-  notifyRechargeCreated,
+  notifyRechargeCreated,
 
 
 
-  sendRechargeForReview,
+  sendRechargeForReview,
 
 
 
-  getStatus,
+  getStatus,
 
   getBot,
 
