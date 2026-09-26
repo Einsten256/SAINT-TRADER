@@ -1,4 +1,4 @@
-/**
+﻿/**
 
 
 
@@ -86,7 +86,7 @@
 
 
 
- *      ↓
+ *      â†“
 
 
 
@@ -102,7 +102,7 @@
 
 
 
- *      ↓
+ *      â†“
 
 
 
@@ -118,7 +118,7 @@
 
 
 
- *      ↓
+ *      â†“
 
 
 
@@ -126,7 +126,7 @@
 
 
 
- *   APPROVE → ADMIN MANUALLY SENDS MOBILE MONEY → CONFIRM DISBURSEMENT
+ *   APPROVE â†’ ADMIN MANUALLY SENDS MOBILE MONEY â†’ CONFIRM DISBURSEMENT
 
 
 
@@ -134,7 +134,7 @@
 
 
 
- *   REJECT  → RESERVED AMOUNT RESTORED
+ *   REJECT  â†’ RESERVED AMOUNT RESTORED
 
 
 
@@ -2116,7 +2116,7 @@ async function handleApprove(query, withdrawalId) {
 
 
 
-      "🟡 \<b>ADMIN ACTION:\</b> APPROVED",
+      "ðŸŸ¡ \<b>ADMIN ACTION:\</b> APPROVED",
 
 
 
@@ -2124,7 +2124,7 @@ async function handleApprove(query, withdrawalId) {
 
 
 
-      "📲 Manually send the NET amount to the number above.",
+      "ðŸ“² Manually send the NET amount to the number above.",
 
 
 
@@ -2220,7 +2220,7 @@ async function handleApprove(query, withdrawalId) {
 
 
 
-              text: "💵 CONFIRM PAID",
+              text: "ðŸ’µ CONFIRM PAID",
 
 
 
@@ -2252,7 +2252,7 @@ async function handleApprove(query, withdrawalId) {
 
 
 
-              text: "❌ REJECT",
+              text: "âŒ REJECT",
 
 
 
@@ -2748,7 +2748,7 @@ async function handleConfirmPaid(query, withdrawalId) {
 
 
 
-        "🟢 \<b>DISBURSED\</b>",
+        "ðŸŸ¢ \<b>DISBURSED\</b>",
 
 
 
@@ -2764,7 +2764,7 @@ async function handleConfirmPaid(query, withdrawalId) {
 
 
 
-        `💵 \<b>Paid:\</b> ${money(result.netAmountUgx)}`,
+        `ðŸ’µ \<b>Paid:\</b> ${money(result.netAmountUgx)}`,
 
 
 
@@ -2780,7 +2780,7 @@ async function handleConfirmPaid(query, withdrawalId) {
 
 
 
-          ? `🧾 \<b>Reference:\</b> \<code>${escapeHtml(
+          ? `ðŸ§¾ \<b>Reference:\</b> \<code>${escapeHtml(
 
 
 
@@ -3220,31 +3220,11 @@ async function handleReject(query, withdrawalId) {
 
 
 
-      await withdrawalService.rejectWithdrawal(
-
-
-
-
-
-
-
+      await withdrawalService.rejectWithdrawal({
         withdrawalId,
-
-
-
-
-
-
-
-        "Rejected by Telegram admin."
-
-
-
-
-
-
-
-      );
+        adminId: String(query.from?.id || "telegram-admin"),
+        reason: "Rejected by Telegram admin.",
+      });
 
 
 
@@ -3332,7 +3312,7 @@ async function handleReject(query, withdrawalId) {
 
 
 
-        "🔴 \<b>REJECTED\</b>",
+        "ðŸ”´ \<b>REJECTED\</b>",
 
 
 
@@ -5416,6 +5396,8 @@ module.exports = {
 
 
 };
+
+
 
 
 
