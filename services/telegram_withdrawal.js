@@ -1596,23 +1596,24 @@ async function editWithdrawalMessage(chatId, messageId, text, replyMarkup) {
 
 
 
-    await bot.api.editMessageText({ chat_id: chatId, message_id: messageId, text, 
-
-
-
-
-
-
-
+    await bot.api.editMessageText({
       chat_id: chatId,
-
-
-
-
-
-
-
       message_id: messageId,
+      text,
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -5337,10 +5338,4 @@ module.exports = {
 
 
 };
-
-
-
-
-
-
 
