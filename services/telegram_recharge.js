@@ -1,4 +1,4 @@
-﻿/**
+/**
 
 
 
@@ -42,7 +42,7 @@
 
 
 
- *        â†“
+ *        ↓
 
 
 
@@ -50,7 +50,7 @@
 
 
 
- *        â†“
+ *        ↓
 
 
 
@@ -58,7 +58,7 @@
 
 
 
- *        â†“
+ *        ↓
 
 
 
@@ -66,7 +66,7 @@
 
 
 
- *        â†“
+ *        ↓
 
 
 
@@ -74,11 +74,11 @@
 
 
 
- *     APPROVE â†’ locked trading capital credited
+ *     APPROVE → locked trading capital credited
 
 
 
- *     REJECT  â†’ no ledger credit
+ *     REJECT  → no ledger credit
 
 
 
@@ -830,7 +830,7 @@ function rechargeText(input) {
 
 
 
-    "ðŸ’° <b>SAINT CRYPTO RECHARGE</b>",
+    "💰 <b>SAINT CRYPTO RECHARGE</b>",
 
 
 
@@ -838,7 +838,7 @@ function rechargeText(input) {
 
 
 
-    `ðŸ†” <b>ID:</b> <code>${escapeHtml(
+    `🆔 <b>ID:</b> <code>${escapeHtml(
 
 
 
@@ -850,7 +850,7 @@ function rechargeText(input) {
 
 
 
-    `ðŸ‘¤ <b>User:</b> <code>${userId}</code>`,
+    `👤 <b>User:</b> <code>${userId}</code>`,
 
 
 
@@ -858,7 +858,7 @@ function rechargeText(input) {
 
 
 
-    `ðŸ’µ <b>Amount:</b> ${money(
+    `💵 <b>Amount:</b> ${money(
 
 
 
@@ -874,15 +874,15 @@ function rechargeText(input) {
 
 
 
-    `ðŸ“± <b>Network:</b> ${network}`,
+    `📱 <b>Network:</b> ${network}`,
 
 
 
-    `ðŸ‘¤ <b>Sender:</b> ${senderName}`,
+    `👤 <b>Sender:</b> ${senderName}`,
 
 
 
-    `ðŸ§¾ <b>Transaction ID:</b> <code>${transactionId}</code>`,
+    `🧾 <b>Transaction ID:</b> <code>${transactionId}</code>`,
 
 
 
@@ -890,11 +890,11 @@ function rechargeText(input) {
 
 
 
-    `ðŸ“Œ <b>Status:</b> ${status}`,
+    `📌 <b>Status:</b> ${status}`,
 
 
 
-    `ðŸ“œ <b>Terms accepted:</b> ${
+    `📜 <b>Terms accepted:</b> ${
 
 
 
@@ -910,7 +910,7 @@ function rechargeText(input) {
 
 
 
-    "âš ï¸ Verify the Mobile Money transaction before approving.",
+    "⚠️ Verify the Mobile Money transaction before approving.",
 
 
 
@@ -950,7 +950,7 @@ function rechargeKeyboard(rechargeId) {
 
 
 
-          text: "âœ… APPROVE RECHARGE",
+          text: "✅ APPROVE RECHARGE",
 
 
 
@@ -970,7 +970,7 @@ function rechargeKeyboard(rechargeId) {
 
 
 
-          text: "âŒ REJECT",
+          text: "❌ REJECT",
 
 
 
@@ -1810,7 +1810,7 @@ async function handleApprove(
 
 
 
-        "ðŸŸ¢ <b>APPROVED</b>",
+        "🟢 <b>APPROVED</b>",
 
 
 
@@ -2162,7 +2162,7 @@ async function handleReject(
 
 
 
-        "ðŸ”´ <b>REJECTED</b>",
+        "🔴 <b>REJECTED</b>",
 
 
 
@@ -2795,11 +2795,7 @@ async function startTelegramRechargeBot() {
 
 
 
-  const token =
-
-
-
-    env("TELEGRAM_BOT_TOKEN");
+  const token = env("SAINT_ADMIN_BOT_TOKEN") || env("TELEGRAM_BOT_TOKEN");
 
 
 
@@ -3666,6 +3662,9 @@ module.exports = {
 
 
 };
+
+
+
 
 
 

@@ -1,4 +1,4 @@
-﻿/**
+/**
 
 
 
@@ -86,7 +86,7 @@
 
 
 
- *      â†“
+ *      ↓
 
 
 
@@ -102,7 +102,7 @@
 
 
 
- *      â†“
+ *      ↓
 
 
 
@@ -118,7 +118,7 @@
 
 
 
- *      â†“
+ *      ↓
 
 
 
@@ -126,7 +126,7 @@
 
 
 
- *   APPROVE â†’ ADMIN MANUALLY SENDS MOBILE MONEY â†’ CONFIRM DISBURSEMENT
+ *   APPROVE → ADMIN MANUALLY SENDS MOBILE MONEY → CONFIRM DISBURSEMENT
 
 
 
@@ -134,7 +134,7 @@
 
 
 
- *   REJECT  â†’ RESERVED AMOUNT RESTORED
+ *   REJECT  → RESERVED AMOUNT RESTORED
 
 
 
@@ -2116,7 +2116,7 @@ async function handleApprove(query, withdrawalId) {
 
 
 
-      "ðŸŸ¡ \<b>ADMIN ACTION:\</b> APPROVED",
+      "🟡 \<b>ADMIN ACTION:\</b> APPROVED",
 
 
 
@@ -2124,7 +2124,7 @@ async function handleApprove(query, withdrawalId) {
 
 
 
-      "ðŸ“² Manually send the NET amount to the number above.",
+      "📲 Manually send the NET amount to the number above.",
 
 
 
@@ -2220,7 +2220,7 @@ async function handleApprove(query, withdrawalId) {
 
 
 
-              text: "ðŸ’µ CONFIRM PAID",
+              text: "💵 CONFIRM PAID",
 
 
 
@@ -2252,7 +2252,7 @@ async function handleApprove(query, withdrawalId) {
 
 
 
-              text: "âŒ REJECT",
+              text: "❌ REJECT",
 
 
 
@@ -2748,7 +2748,7 @@ async function handleConfirmPaid(query, withdrawalId) {
 
 
 
-        "ðŸŸ¢ \<b>DISBURSED\</b>",
+        "🟢 \<b>DISBURSED\</b>",
 
 
 
@@ -2764,7 +2764,7 @@ async function handleConfirmPaid(query, withdrawalId) {
 
 
 
-        `ðŸ’µ \<b>Paid:\</b> ${money(result.netAmountUgx)}`,
+        `💵 \<b>Paid:\</b> ${money(result.netAmountUgx)}`,
 
 
 
@@ -2780,7 +2780,7 @@ async function handleConfirmPaid(query, withdrawalId) {
 
 
 
-          ? `ðŸ§¾ \<b>Reference:\</b> \<code>${escapeHtml(
+          ? `🧾 \<b>Reference:\</b> \<code>${escapeHtml(
 
 
 
@@ -3332,7 +3332,7 @@ async function handleReject(query, withdrawalId) {
 
 
 
-        "ðŸ”´ \<b>REJECTED\</b>",
+        "🔴 \<b>REJECTED\</b>",
 
 
 
@@ -4196,7 +4196,7 @@ async function startTelegramWithdrawalBot(sharedBot = null) {
 
 
 
-  const token = env("TELEGRAM_BOT_TOKEN");
+  const token = env("SAINT_ADMIN_BOT_TOKEN") || env("TELEGRAM_BOT_TOKEN");
 
 
 
@@ -5416,6 +5416,7 @@ module.exports = {
 
 
 };
+
 
 
 
