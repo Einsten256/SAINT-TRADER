@@ -830,7 +830,7 @@ function rechargeText(input) {
 
 
 
-    "ðŸ’° <b>SAINT CRYPTO RECHARGE</b>",
+    "\u{1F4B0} <b>SAINT CRYPTO RECHARGE</b>",
 
 
 
@@ -838,7 +838,7 @@ function rechargeText(input) {
 
 
 
-    `ðŸ†” <b>ID:</b> <code>${escapeHtml(
+    `\u{1F194} <b>ID:</b> <code>${escapeHtml(
 
 
 
@@ -850,7 +850,7 @@ function rechargeText(input) {
 
 
 
-    `ðŸ‘¤ <b>User:</b> <code>${userId}</code>`,
+    `\u{1F464} <b>User:</b> <code>${userId}</code>`,
 
 
 
@@ -858,7 +858,7 @@ function rechargeText(input) {
 
 
 
-    `ðŸ’µ <b>Amount:</b> ${money(
+    `\u{1F4B5} <b>Amount:</b> ${money(
 
 
 
@@ -874,15 +874,15 @@ function rechargeText(input) {
 
 
 
-    `ðŸ“± <b>Network:</b> ${network}`,
+    `\u{1F4F1} <b>Network:</b> ${network}`,
 
 
 
-    `ðŸ‘¤ <b>Sender:</b> ${senderName}`,
+    `\u{1F464} <b>Sender:</b> ${senderName}`,
 
 
 
-    `ðŸ§¾ <b>Transaction ID:</b> <code>${transactionId}</code>`,
+    `\u{1F9FE} <b>Transaction ID:</b> <code>${transactionId}</code>`,
 
 
 
@@ -890,11 +890,11 @@ function rechargeText(input) {
 
 
 
-    `ðŸ“Œ <b>Status:</b> ${status}`,
+    `\u{1F4CC} <b>Status:</b> ${status}`,
 
 
 
-    `ðŸ“œ <b>Terms accepted:</b> ${
+    `\u{1F4DC} <b>Terms accepted:</b> ${
 
 
 
@@ -910,7 +910,7 @@ function rechargeText(input) {
 
 
 
-    "âš ï¸ Verify the Mobile Money transaction before approving.",
+    "\u{26A0}\u{FE0F} Verify the Mobile Money transaction before approving.",
 
 
 
@@ -1810,7 +1810,7 @@ async function handleApprove(
 
 
 
-        "ðŸŸ¢ <b>APPROVED</b>",
+        "\u{1F7E2} <b>APPROVED</b>",
 
 
 
@@ -2162,7 +2162,7 @@ async function handleReject(
 
 
 
-        "ðŸ”´ <b>REJECTED</b>",
+        "\u{1F534} <b>REJECTED</b>",
 
 
 
