@@ -1170,7 +1170,7 @@ function escapeHtml(value) {
 
 
 
-    .replace(/**<**/g, "&lt;")
+    .replace(/</g, "&lt;")
 
 
 
@@ -1203,436 +1203,54 @@ function escapeHtml(value) {
 
 
 function withdrawalText(withdrawal) {
-
-
-
-
-
-
-
   const network = escapeHtml(withdrawal.network || "UNKNOWN");
-
-
-
-
-
-
-
-  const recipientName = escapeHtml(
-
-
-
-
-
-
-
-    withdrawal.recipientName || "Unknown"
-
-
-
-
-
-
-
-  );
-
-
-
-
-
-
-
-  const mobileNumber = escapeHtml(
-
-
-
-
-
-
-
-    withdrawal.mobileNumber || "Unknown"
-
-
-
-
-
-
-
-  );
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+  const recipientName = escapeHtml(withdrawal.recipientName || "Unknown");
+  const mobileNumber = escapeHtml(withdrawal.mobileNumber || "Unknown");
 
   return [
-
-
-
-
-
-
-
-    "ðŸ’¸ \<b>SAINT CRYPTO WITHDRAWAL\</b>",
-
-
-
-
-
-
-
+    "\u{1F4B8} <b>SAINT CRYPTO WITHDRAWAL</b>",
     "",
-
-
-
-
-
-
-
-    `ðŸ†” \<b>ID:\</b> \<code>${escapeHtml(withdrawal.id)}\</code>`,
-
-
-
-
-
-
-
-    `ðŸ‘¤ \<b>User:\</b> \<code>${escapeHtml(withdrawal.userId)}\</code>`,
-
-
-
-
-
-
-
+    `\u{1F194} <b>ID:</b> <code>${escapeHtml(withdrawal.id)}</code>`,
+    `\u{1F464} <b>User:</b> <code>${escapeHtml(withdrawal.userId)}</code>`,
     "",
-
-
-
-
-
-
-
-    `ðŸ‘¤ \<b>Recipient:\</b> ${recipientName}`,
-
-
-
-
-
-
-
-    `ðŸ“± \<b>Network:\</b> ${network}`,
-
-
-
-
-
-
-
-    `â˜Žï¸ \<b>Number:\</b> \<code>${mobileNumber}\</code>`,
-
-
-
-
-
-
-
+    `\u{1F464} <b>Recipient:</b> ${recipientName}`,
+    `\u{1F4F1} <b>Network:</b> ${network}`,
+    `\u{260E}\u{FE0F} <b>Number:</b> <code>${mobileNumber}</code>`,
     "",
-
-
-
-
-
-
-
-    `ðŸ’° \<b>Gross:\</b> ${money(withdrawal.amountUgx)}`,
-
-
-
-
-
-
-
-    `ðŸ’³ \<b>Fee (5%):\</b> ${money(withdrawal.feeUgx)}`,
-
-
-
-
-
-
-
-    `ðŸ“¤ \<b>Net to send:\</b> ${money(withdrawal.netAmountUgx)}`,
-
-
-
-
-
-
-
+    `\u{1F4B0} <b>Gross:</b> ${money(withdrawal.amountUgx)}`,
+    `\u{1F4B3} <b>Fee (5%):</b> ${money(withdrawal.feeUgx)}`,
+    `\u{1F4E4} <b>Net to send:</b> ${money(withdrawal.netAmountUgx)}`,
     "",
-
-
-
-
-
-
-
-    `ðŸ“Œ \<b>Status:\</b> ${escapeHtml(withdrawal.status)}`,
-
-
-
-
-
-
-
+    `\u{1F4CC} <b>Status:</b> ${escapeHtml(withdrawal.status)}`,
     "",
-
-
-
-
-
-
-
-    "âš ï¸ \<b>Manual Mobile Money payment required.\</b>",
-
-
-
-
-
-
-
+    "\u{26A0}\u{FE0F} <b>Manual Mobile Money payment required.</b>",
     "Send the NET amount to the saved number above.",
-
-
-
-
-
-
-
-    "Then use \<b>CONFIRM PAID\</b>.",
-
-
-
-
-
-
-
+    "Then use <b>CONFIRM PAID</b>.",
   ].join("\n");
-
-
-
-
-
-
-
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 function withdrawalKeyboard(withdrawalId) {
-
-
-
-
-
-
-
   return {
-
-
-
-
-
-
-
     inline_keyboard: [
-
-
-
-
-
-
-
       [
-
-
-
-
-
-
-
         {
-
-
-
-
-
-
-
-          text: "âœ… APPROVE / PAY",
-
-
-
-
-
-
-
+          text: "APPROVE / PAY",
           callback_data: `wd_approve:${withdrawalId}`,
-
-
-
-
-
-
-
         },
-
-
-
-
-
-
-
         {
-
-
-
-
-
-
-
-          text: "âŒ REJECT",
-
-
-
-
-
-
-
+          text: "REJECT",
           callback_data: `wd_reject:${withdrawalId}`,
-
-
-
-
-
-
-
         },
-
-
-
-
-
-
-
       ],
-
-
-
-
-
-
-
       [
-
-
-
-
-
-
-
         {
-
-
-
-
-
-
-
-          text: "ðŸ’µ CONFIRM PAID",
-
-
-
-
-
-
-
+          text: "CONFIRM PAID",
           callback_data: `wd_paid:${withdrawalId}`,
-
-
-
-
-
-
-
         },
-
-
-
-
-
-
-
       ],
-
-
-
-
-
-
-
     ],
-
-
-
-
-
-
-
   };
-
-
-
-
-
-
-
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 async function sendWithdrawalForReview(withdrawal) {
 
@@ -5790,4 +5408,7 @@ module.exports = {
 
 
 };
+
+
+
 
