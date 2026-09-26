@@ -2220,6 +2220,46 @@ function requireBusinessManagerAdmin(
   return next();
 }
 
+
+// ============================================================
+// SAINT ADMIN — FIREBASE MASTER ACCOUNT GUARD
+// ============================================================
+
+async function requireSaintAdmin(req, res, next) {
+  try {
+    await verifyAuth(req, res, async () => {
+      const configuredUid = String(
+        process.env.SAINT_ADMIN_UID || ""
+      ).trim();
+
+      if (!configuredUid) {
+        return res.status(503).json({
+          success: false,
+          code: "SAINT_ADMIN_NOT_CONFIGURED",
+          message: "SAINT ADMIN UID is not configured."
+        });
+      }
+
+      if (!req.uid || req.uid !== configuredUid) {
+        return res.status(403).json({
+          success: false,
+          code: "SAINT_ADMIN_FORBIDDEN",
+          message: "SAINT ADMIN access denied."
+        });
+      }
+
+      return next();
+    });
+  } catch (error) {
+    console.error("[SAINT ADMIN AUTH]", error);
+
+    return res.status(401).json({
+      success: false,
+      code: "SAINT_ADMIN_UNAUTHORIZED",
+      message: "SAINT ADMIN authentication failed."
+    });
+  }
+}
 // ------------------------------------------------------------
 // GENERATE DAILY SIGNAL MANUALLY
 // ------------------------------------------------------------
