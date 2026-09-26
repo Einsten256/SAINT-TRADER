@@ -1714,7 +1714,7 @@ async function sendWithdrawalForReview(withdrawal) {
 
 
 
-  const message = await bot.sendMessage(getChatId(), text, {
+  const message = await bot.api.sendMessage({ chat_id: getChatId(), text, 
 
 
 
@@ -1746,7 +1746,7 @@ async function sendWithdrawalForReview(withdrawal) {
 
 
 
-  });
+   });
 
 
 
@@ -1842,7 +1842,7 @@ async function safeAnswerCallback(queryId, text, showAlert = false) {
 
 
 
-      await bot.answerCallbackQuery(queryId, {
+      await bot.api.answerCallbackQuery({ callback_query_id: queryId, 
 
 
 
@@ -1866,7 +1866,7 @@ async function safeAnswerCallback(queryId, text, showAlert = false) {
 
 
 
-      });
+       });
 
 
 
@@ -1978,7 +1978,7 @@ async function editWithdrawalMessage(chatId, messageId, text, replyMarkup) {
 
 
 
-    await bot.editMessageText(text, {
+    await bot.api.editMessageText({ chat_id: chatId, message_id: messageId, text, 
 
 
 
@@ -2050,7 +2050,7 @@ async function editWithdrawalMessage(chatId, messageId, text, replyMarkup) {
 
 
 
-        : {}),
+        : { }),
 
 
 
@@ -4338,6 +4338,46 @@ function registerHandlers() {
 
 
 
+
+async function resendPendingWithdrawalsOnStartup() {
+  try {
+    const { getFirestore } = require("firebase-admin/firestore");
+    const db = getFirestore();
+
+    const snap = await db.collection("withdrawals")
+      .where("status", "==", "UNDER_REVIEW")
+      .get();
+
+    console.log("[telegram withdrawal] Pending on startup:", snap.size);
+
+    for (const doc of snap.docs) {
+      const withdrawal = {
+        id: doc.id,
+        ...(doc.data() || {})
+      };
+
+      try {
+        await sendWithdrawalForReview(withdrawal);
+        console.log(
+          "[telegram withdrawal] Startup resend:",
+          withdrawal.id
+        );
+      } catch (error) {
+        console.error(
+          "[telegram withdrawal] Startup resend failed:",
+          withdrawal.id,
+          error?.message || error
+        );
+      }
+    }
+  } catch (error) {
+    console.error(
+      "[telegram withdrawal] Startup recovery failed:",
+      error?.message || error
+    );
+  }
+}
+
 async function startTelegramWithdrawalBot(sharedBot = null) {
 
 
@@ -4711,6 +4751,7 @@ async function startTelegramWithdrawalBot(sharedBot = null) {
 
 
     registerHandlers();
+    setTimeout(() => resendPendingWithdrawalsOnStartup(), 1500);
 
 
 
