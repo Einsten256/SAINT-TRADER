@@ -2596,71 +2596,12 @@ async function handleConfirmPaid(query, withdrawalId) {
 
 
 
-      await withdrawalService.approveAndDisburseWithdrawal(
-
-
-
-
-
-
-
-        withdrawalId,
-
-
-
-
-
-
-
-        {
-
-
-
-
-
-
-
-          paymentReference:
-
-
-
-
-
-
-
-            `MANUAL_MM\\\\_${Date.now()}`,
-
-
-
-
-
-
-
-          adminTelegramId: String(query.from.id),
-
-
-
-
-
-
-
-          approvedAt: new Date(),
-
-
-
-
-
-
-
-        }
-
-
-
-
-
-
-
-      );
+          await withdrawalService.approveAndDisburseWithdrawal({
+            withdrawalId,
+            adminId: String(query.from?.id || "telegram-admin"),
+            paymentReference: `MANUAL_MM_${Date.now()}`,
+            adminNote: "Manual Mobile Money payment confirmed by Telegram admin.",
+          });
 
 
 
