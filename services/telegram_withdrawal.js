@@ -3548,7 +3548,15 @@ function registerHandlers() {
 
 
 
-  bot.on("callback_query", async (query) => {
+  bot.on("callback_query", async (ctx) => {
+    const query =
+      ctx?.callbackQuery ? {
+        id: ctx.callbackQuery.id,
+        from: ctx.from || ctx.callbackQuery.from,
+        data: ctx.callbackQuery.data,
+        message: ctx.callbackQuery.message,
+      } : ctx;
+
 
 
 
