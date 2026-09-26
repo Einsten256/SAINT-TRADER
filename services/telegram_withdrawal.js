@@ -3567,6 +3567,7 @@ function registerHandlers() {
 
 
       const data = String(query.data || "");
+      console.log("[telegram withdrawal] CALLBACK HANDLER RECEIVED", { id: query.id, from: query.from?.id, data });
 
 
 
