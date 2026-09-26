@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // SAINT CRYPTO TRADE ENGINE
 // index.js
 // ============================================================
@@ -8,22 +8,22 @@
 // STRUCTURE:
 //
 // BACKEND/
-// ├── index.js
-// ├── firebase_manager.js
-// └── services/
-//     ├── kendrick.js
-//     ├── config.js
-//     ├── bybit.js
-//     ├── ledger.js
-//     ├── deposit.js
-//     ├── signal.js
-//     ├── withdrawal.js
-//     └── routes/
-//         ├── auth.js
-//         ├── deposits.js
-//         ├── kendrick.js
-//         ├── signal.js
-//         └── withdrawal.js
+// â”œâ”€â”€ index.js
+// â”œâ”€â”€ firebase_manager.js
+// â””â”€â”€ services/
+//     â”œâ”€â”€ kendrick.js
+//     â”œâ”€â”€ config.js
+//     â”œâ”€â”€ bybit.js
+//     â”œâ”€â”€ ledger.js
+//     â”œâ”€â”€ deposit.js
+//     â”œâ”€â”€ signal.js
+//     â”œâ”€â”€ withdrawal.js
+//     â””â”€â”€ routes/
+//         â”œâ”€â”€ auth.js
+//         â”œâ”€â”€ deposits.js
+//         â”œâ”€â”€ kendrick.js
+//         â”œâ”€â”€ signal.js
+//         â””â”€â”€ withdrawal.js
 //
 // ============================================================
 // FINAL AUDIT NOTE:
@@ -55,11 +55,11 @@ try {
   rateLimit = require("express-rate-limit");
 
   console.log(
-    "✅ express-rate-limit loaded."
+    "âœ… express-rate-limit loaded."
   );
 } catch (error) {
   console.warn(
-    "⚠️ express-rate-limit is not installed. Rate limiting disabled."
+    "âš ï¸ express-rate-limit is not installed. Rate limiting disabled."
   );
 }
 
@@ -341,7 +341,7 @@ function initializeFirebase() {
       } catch (error) {
 
         console.warn(
-          "⚠️ Firebase RTDB unavailable:",
+          "âš ï¸ Firebase RTDB unavailable:",
           error.message
         );
 
@@ -353,15 +353,15 @@ function initializeFirebase() {
         true;
 
       console.log(
-        "🔥 Reusing existing Firebase Admin app."
+        "ðŸ”¥ Reusing existing Firebase Admin app."
       );
 
       console.log(
-        "🟢 Firestore: READY"
+        "ðŸŸ¢ Firestore: READY"
       );
 
       console.log(
-        `🟢 RTDB: ${
+        `ðŸŸ¢ RTDB: ${
           realtimeDb
             ? "READY"
             : "UNAVAILABLE"
@@ -440,7 +440,7 @@ function initializeFirebase() {
     } catch (error) {
 
       console.warn(
-        "⚠️ Firebase RTDB unavailable:",
+        "âš ï¸ Firebase RTDB unavailable:",
         error.message
       );
 
@@ -460,7 +460,7 @@ function initializeFirebase() {
     );
 
     console.log(
-      "🔥 FIREBASE INITIALIZATION"
+      "ðŸ”¥ FIREBASE INITIALIZATION"
     );
 
     console.log(
@@ -468,15 +468,15 @@ function initializeFirebase() {
     );
 
     console.log(
-      "✅ Firebase Admin initialized successfully."
+      "âœ… Firebase Admin initialized successfully."
     );
 
     console.log(
-      "🟢 Firestore: READY"
+      "ðŸŸ¢ Firestore: READY"
     );
 
     console.log(
-      `🟢 RTDB: ${
+      `ðŸŸ¢ RTDB: ${
         realtimeDb
           ? "READY"
           : "UNAVAILABLE"
@@ -494,7 +494,7 @@ function initializeFirebase() {
     );
 
     console.error(
-      "❌ FIREBASE INITIALIZATION FAILED"
+      "âŒ FIREBASE INITIALIZATION FAILED"
     );
 
     console.error(
@@ -549,6 +549,43 @@ app.use(
   })
 );
 
+
+const TELEGRAM_WEBHOOK_SECRET =
+  process.env.TELEGRAM_WEBHOOK_SECRET || "";
+
+app.post("/api/telegram/webhook", async (req, res) => {
+  try {
+    if (
+      TELEGRAM_WEBHOOK_SECRET &&
+      req.get("X-Telegram-Bot-Api-Secret-Token") !==
+        TELEGRAM_WEBHOOK_SECRET
+    ) {
+      return res.sendStatus(403);
+    }
+
+    const bot =
+      typeof telegramRecharge?.getBot === "function"
+        ? telegramRecharge.getBot()
+        : null;
+
+    if (!bot || typeof bot.handleUpdate !== "function") {
+      console.error(
+        "[telegram webhook] Bot is not ready."
+      );
+      return res.sendStatus(503);
+    }
+
+    await bot.handleUpdate(req.body);
+
+    return res.sendStatus(200);
+  } catch (error) {
+    console.error(
+      "[telegram webhook] Update handling failed:",
+      error?.stack || error
+    );
+    return res.sendStatus(500);
+  }
+});
 app.use(
   express.urlencoded({
     extended: true,
@@ -797,7 +834,7 @@ const corsOptions = {
       // ------------------------------------------------------
 
       console.warn(
-        "⚠️ CORS blocked origin:",
+        "âš ï¸ CORS blocked origin:",
         origin
       );
 
@@ -1158,7 +1195,7 @@ async function verifyAuth(
   } catch (error) {
 
     console.error(
-      "❌ Authentication error:",
+      "âŒ Authentication error:",
       error.message
     );
 
@@ -1279,13 +1316,13 @@ try {
     require("./services/scheduler");
 
   console.log(
-    "✅ All Saint Crypto financial services loaded."
+    "âœ… All Saint Crypto financial services loaded."
   );
 
 } catch (error) {
 
   console.error(
-    "❌ Service loading failed:"
+    "âŒ Service loading failed:"
   );
 
   console.error(
@@ -1334,7 +1371,7 @@ console.log(
 );
 
 console.log(
-  "🔍 SERVICE EXPORT CHECK"
+  "ðŸ” SERVICE EXPORT CHECK"
 );
 
 console.log(
@@ -1488,7 +1525,7 @@ function mountRoute(
       ) {
 
         console.error(
-          `❌ ${routeName} returned an invalid Express router.`
+          `âŒ ${routeName} returned an invalid Express router.`
         );
 
         return false;
@@ -1497,7 +1534,7 @@ function mountRoute(
       app.use(router);
 
       console.log(
-        `✅ Route loaded: ${routeName}`
+        `âœ… Route loaded: ${routeName}`
       );
 
       return true;
@@ -1531,14 +1568,14 @@ function mountRoute(
       );
 
       console.log(
-        `✅ Route loaded: ${routeName} -> ${API_PREFIX}${directMountPath}`
+        `âœ… Route loaded: ${routeName} -> ${API_PREFIX}${directMountPath}`
       );
 
       return true;
     }
 
     console.error(
-      `❌ ${routeName} is not a supported route module.`
+      `âŒ ${routeName} is not a supported route module.`
     );
 
     return false;
@@ -1546,7 +1583,7 @@ function mountRoute(
   } catch (error) {
 
     console.error(
-      `❌ Failed to load ${routeName}:`
+      `âŒ Failed to load ${routeName}:`
     );
 
     console.error(
@@ -1622,11 +1659,11 @@ try {
   );
 
   console.log(
-    `✅ Route loaded: Mobile Money Deposits -> ${API_PREFIX}/deposits`
+    `âœ… Route loaded: Mobile Money Deposits -> ${API_PREFIX}/deposits`
   );
 } catch (error) {
   console.error(
-    "❌ Failed to load Mobile Money Deposits:",
+    "âŒ Failed to load Mobile Money Deposits:",
     error.stack || error.message
   );
 }
@@ -1657,11 +1694,11 @@ try {
   );
 
   console.log(
-    `✅ Route loaded: Signals -> ${API_PREFIX}/signals`
+    `âœ… Route loaded: Signals -> ${API_PREFIX}/signals`
   );
 } catch (error) {
   console.error(
-    "❌ Failed to load Signals:",
+    "âŒ Failed to load Signals:",
     error.stack || error.message
   );
 }
@@ -1706,7 +1743,7 @@ app.get(
       );
     } catch (error) {
       console.error(
-        "❌ Balance request failed:",
+        "âŒ Balance request failed:",
         error.stack || error.message
       );
 
@@ -1738,7 +1775,7 @@ mountRoute(
 );
 
 console.log(
-  "ℹ️ Transfer route remains handled by routes/kendrick.js."
+  "â„¹ï¸ Transfer route remains handled by routes/kendrick.js."
 );
 
 // ============================================================
@@ -1756,7 +1793,7 @@ console.log(
 // ============================================================
 
 console.log(
-  "ℹ️ Transfer route handled by routes/kendrick.js."
+  "â„¹ï¸ Transfer route handled by routes/kendrick.js."
 );
 
 // ============================================================
@@ -1982,7 +2019,7 @@ try {
     );
 
   console.log(
-    "✅ firebase_manager.js loaded."
+    "âœ… firebase_manager.js loaded."
   );
 
   if (
@@ -1991,7 +2028,7 @@ try {
   ) {
 
     console.log(
-      "🟢 Firebase manager status:"
+      "ðŸŸ¢ Firebase manager status:"
     );
 
     try {
@@ -2003,7 +2040,7 @@ try {
     } catch (error) {
 
       console.warn(
-        "⚠️ Could not read Firebase manager status:",
+        "âš ï¸ Could not read Firebase manager status:",
         error.message
       );
     }
@@ -2012,7 +2049,7 @@ try {
 } catch (error) {
 
   console.error(
-    "❌ firebase_manager.js could not be loaded:"
+    "âŒ firebase_manager.js could not be loaded:"
   );
 
   console.error(
@@ -2093,7 +2130,7 @@ app.post(
         "MANUAL TEST";
 
       console.log(
-        `🧪 Manual signal test requested: ${sessionLabel}`
+        `ðŸ§ª Manual signal test requested: ${sessionLabel}`
       );
 
       const result =
@@ -2109,7 +2146,7 @@ app.post(
 
     } catch (error) {
       console.error(
-        "❌ Manual signal test failed:",
+        "âŒ Manual signal test failed:",
         error.stack || error.message
       );
 
@@ -2227,7 +2264,7 @@ app.post(
     } catch (error) {
 
       console.error(
-        "❌ Business Manager signal generation failed:",
+        "âŒ Business Manager signal generation failed:",
         error.stack || error.message
       );
 
@@ -2299,7 +2336,7 @@ app.post(
     } catch (error) {
 
       console.error(
-        "❌ Business Manager recharge approval failed:",
+        "âŒ Business Manager recharge approval failed:",
         error.stack || error.message
       );
 
@@ -2376,7 +2413,7 @@ app.post(
     } catch (error) {
 
       console.error(
-        "❌ Business Manager recharge rejection failed:",
+        "âŒ Business Manager recharge rejection failed:",
         error.stack || error.message
       );
 
@@ -2463,7 +2500,7 @@ app.post(
     } catch (error) {
 
       console.error(
-        "❌ Business Manager withdrawal approval failed:",
+        "âŒ Business Manager withdrawal approval failed:",
         error.stack || error.message
       );
 
@@ -2545,7 +2582,7 @@ app.post(
     } catch (error) {
 
       console.error(
-        "❌ Business Manager withdrawal rejection failed:",
+        "âŒ Business Manager withdrawal rejection failed:",
         error.stack || error.message
       );
 
@@ -2591,13 +2628,13 @@ function startFinancialProcessors() {
       signal.startSignalPayoutProcessor();
 
       console.log(
-        "✅ Signal payout processor started."
+        "âœ… Signal payout processor started."
       );
 
     } catch (error) {
 
       console.error(
-        "❌ Signal payout processor failed:",
+        "âŒ Signal payout processor failed:",
         error.message
       );
     }
@@ -2605,7 +2642,7 @@ function startFinancialProcessors() {
   } else {
 
     console.error(
-      "❌ Signal payout processor unavailable."
+      "âŒ Signal payout processor unavailable."
     );
   }
 
@@ -2625,7 +2662,7 @@ function startFinancialProcessors() {
         .then((result) => {
 
           console.log(
-            "📱 Telegram recharge bot:",
+            "ðŸ“± Telegram recharge bot:",
             result
           );
 
@@ -2655,7 +2692,7 @@ function startFinancialProcessors() {
 
           if (result) {
             console.log(
-              "📱 Telegram withdrawal bot:",
+              "ðŸ“± Telegram withdrawal bot:",
               result
             );
           }
@@ -2664,7 +2701,7 @@ function startFinancialProcessors() {
         .catch((error) => {
 
           console.error(
-            "❌ Telegram financial bot startup failed:",
+            "âŒ Telegram financial bot startup failed:",
             error.message
           );
 
@@ -2673,7 +2710,7 @@ function startFinancialProcessors() {
     } catch (error) {
 
       console.error(
-        "❌ Telegram recharge startup failed:",
+        "âŒ Telegram recharge startup failed:",
         error.message
       );
     }
@@ -2681,7 +2718,7 @@ function startFinancialProcessors() {
   } else {
 
     console.error(
-      "❌ Telegram recharge service unavailable."
+      "âŒ Telegram recharge service unavailable."
     );
   }
 
@@ -2706,13 +2743,13 @@ function startFinancialProcessors() {
       scheduler.startScheduler();
 
       console.log(
-        "✅ Signal scheduler started: Monday-Friday 9:00 PM EAT."
+        "âœ… Signal scheduler started: Monday-Friday 9:00 PM EAT."
       );
 
     } catch (error) {
 
       console.error(
-        "❌ Signal scheduler failed:",
+        "âŒ Signal scheduler failed:",
         error.message
       );
     }
@@ -2720,7 +2757,7 @@ function startFinancialProcessors() {
   } else {
 
     console.error(
-      "❌ New signal scheduler unavailable."
+      "âŒ New signal scheduler unavailable."
     );
   }
 }
@@ -2742,14 +2779,14 @@ function stopFinancialProcessors() {
       signal.stopSignalPayoutProcessor();
 
       console.log(
-        "🛑 Signal payout processor stopped."
+        "ðŸ›‘ Signal payout processor stopped."
       );
     }
 
   } catch (error) {
 
     console.warn(
-      "⚠️ Signal processor shutdown:",
+      "âš ï¸ Signal processor shutdown:",
       error.message
     );
   }
@@ -2769,14 +2806,14 @@ function stopFinancialProcessors() {
       scheduler.stopScheduler();
 
       console.log(
-        "🛑 Signal scheduler stopped."
+        "ðŸ›‘ Signal scheduler stopped."
       );
     }
 
   } catch (error) {
 
     console.warn(
-      "⚠️ Signal scheduler shutdown:",
+      "âš ï¸ Signal scheduler shutdown:",
       error.message
     );
   }
@@ -2796,14 +2833,14 @@ function stopFinancialProcessors() {
       void telegramRecharge.stopTelegramRechargeBot();
 
       console.log(
-        "🛑 Telegram recharge bot stopped."
+        "ðŸ›‘ Telegram recharge bot stopped."
       );
     }
 
   } catch (error) {
 
     console.warn(
-      "⚠️ Telegram recharge shutdown:",
+      "âš ï¸ Telegram recharge shutdown:",
       error.message
     );
   }
@@ -2823,14 +2860,14 @@ function stopFinancialProcessors() {
       void telegramWithdrawal.stopTelegramWithdrawalBot();
 
       console.log(
-        "🛑 Telegram withdrawal bot stopped."
+        "ðŸ›‘ Telegram withdrawal bot stopped."
       );
     }
 
   } catch (error) {
 
     console.warn(
-      "⚠️ Telegram withdrawal shutdown:",
+      "âš ï¸ Telegram withdrawal shutdown:",
       error.message
     );
   }
@@ -2847,7 +2884,7 @@ function startMarketSync() {
   ) {
 
     console.warn(
-      "⚠️ Bybit service unavailable."
+      "âš ï¸ Bybit service unavailable."
     );
 
     return false;
@@ -2859,7 +2896,7 @@ function startMarketSync() {
   ) {
 
     console.warn(
-      "⚠️ bybit.startMarketSync() unavailable."
+      "âš ï¸ bybit.startMarketSync() unavailable."
     );
 
     return false;
@@ -2873,14 +2910,14 @@ function startMarketSync() {
     if (!started) {
 
       console.log(
-        "ℹ️ Bybit market synchronization is disabled."
+        "â„¹ï¸ Bybit market synchronization is disabled."
       );
 
       return false;
     }
 
     console.log(
-      "✅ Bybit market synchronization started."
+      "âœ… Bybit market synchronization started."
     );
 
     return true;
@@ -2888,7 +2925,7 @@ function startMarketSync() {
   } catch (error) {
 
     console.error(
-      "❌ Market synchronization failed:",
+      "âŒ Market synchronization failed:",
       error.message
     );
 
@@ -2907,7 +2944,7 @@ async function startBybitWebSocket() {
   ) {
 
     console.warn(
-      "⚠️ Bybit service unavailable."
+      "âš ï¸ Bybit service unavailable."
     );
 
     return false;
@@ -2919,7 +2956,7 @@ async function startBybitWebSocket() {
   ) {
 
     console.warn(
-      "⚠️ Bybit private WebSocket unavailable."
+      "âš ï¸ Bybit private WebSocket unavailable."
     );
 
     return false;
@@ -2933,14 +2970,14 @@ async function startBybitWebSocket() {
     if (!connected) {
 
       console.log(
-        "ℹ️ Bybit private WebSocket is disabled."
+        "â„¹ï¸ Bybit private WebSocket is disabled."
       );
 
       return false;
     }
 
     console.log(
-      "✅ Bybit private WebSocket connected."
+      "âœ… Bybit private WebSocket connected."
     );
 
     return true;
@@ -2948,7 +2985,7 @@ async function startBybitWebSocket() {
   } catch (error) {
 
     console.warn(
-      "⚠️ Bybit WebSocket startup:",
+      "âš ï¸ Bybit WebSocket startup:",
       error.message
     );
 
@@ -3001,7 +3038,7 @@ app.use(
   ) => {
 
     console.error(
-      "❌ GLOBAL ERROR:",
+      "âŒ GLOBAL ERROR:",
       error.stack ||
         error.message ||
         error
@@ -3116,7 +3153,7 @@ const server =
       );
 
       console.log(
-        "🚀 SAINT CRYPTO TRADE ENGINE"
+        "ðŸš€ SAINT CRYPTO TRADE ENGINE"
       );
 
       console.log(
@@ -3124,19 +3161,19 @@ const server =
       );
 
       console.log(
-        `🌐 Server: ${HOST}:${PORT}`
+        `ðŸŒ Server: ${HOST}:${PORT}`
       );
 
       console.log(
-        `🌐 Environment: ${NODE_ENV}`
+        `ðŸŒ Environment: ${NODE_ENV}`
       );
 
       console.log(
-        `🌐 API Prefix: ${API_PREFIX}`
+        `ðŸŒ API Prefix: ${API_PREFIX}`
       );
 
       console.log(
-        `🔥 Firebase: ${
+        `ðŸ”¥ Firebase: ${
           firebaseReady
             ? "READY"
             : "NOT READY"
@@ -3144,7 +3181,7 @@ const server =
       );
 
       console.log(
-        `🔥 Firestore: ${
+        `ðŸ”¥ Firestore: ${
           firestore
             ? "READY"
             : "UNAVAILABLE"
@@ -3152,7 +3189,7 @@ const server =
       );
 
       console.log(
-        `🔥 RTDB: ${
+        `ðŸ”¥ RTDB: ${
           realtimeDb
             ? "READY"
             : "UNAVAILABLE"
@@ -3168,7 +3205,7 @@ const server =
       );
 
       console.log(
-        "🌐 CORS CONFIGURATION"
+        "ðŸŒ CORS CONFIGURATION"
       );
 
       console.log(
@@ -3176,19 +3213,19 @@ const server =
       );
 
       console.log(
-        "✅ localhost:<ANY PORT>"
+        "âœ… localhost:<ANY PORT>"
       );
 
       console.log(
-        "✅ 127.0.0.1:<ANY PORT>"
+        "âœ… 127.0.0.1:<ANY PORT>"
       );
 
       console.log(
-        "✅ *.web.app"
+        "âœ… *.web.app"
       );
 
       console.log(
-        "✅ *.firebaseapp.com"
+        "âœ… *.firebaseapp.com"
       );
 
       for (
@@ -3197,7 +3234,7 @@ const server =
       ) {
 
         console.log(
-          `✅ ${origin}`
+          `âœ… ${origin}`
         );
       }
 
@@ -3218,14 +3255,14 @@ const server =
             : null;
 
         console.log(
-          `💰 Signal reward: ${
+          `ðŸ’° Signal reward: ${
             publicConfig?.signals?.rewardUgx ??
             20000
           } UGX`
         );
 
         console.log(
-          `⏰ Signal schedule: ${
+          `â° Signal schedule: ${
             publicConfig?.signals?.time ??
             "21:00"
           } ${
@@ -3235,14 +3272,14 @@ const server =
         );
 
         console.log(
-          `⏳ Signal processing: ${
+          `â³ Signal processing: ${
             publicConfig?.signals?.processingMinutes ??
             7
           } minute(s)`
         );
 
         console.log(
-          `📥 Mobile Money recharge: ${
+          `ðŸ“¥ Mobile Money recharge: ${
             publicConfig?.financial?.recharge?.enabled
               ? "ENABLED"
               : "DISABLED"
@@ -3250,7 +3287,7 @@ const server =
         );
 
         console.log(
-          `💸 Mobile Money withdrawal: ${
+          `ðŸ’¸ Mobile Money withdrawal: ${
             publicConfig?.financial?.withdrawal?.enabled
               ? "ENABLED"
               : "DISABLED"
@@ -3258,7 +3295,7 @@ const server =
         );
 
         console.log(
-          `💳 Withdrawal fee: ${
+          `ðŸ’³ Withdrawal fee: ${
             publicConfig?.financial?.withdrawal?.feePercent ??
             5
           }%`
@@ -3267,7 +3304,7 @@ const server =
       } catch (error) {
 
         console.warn(
-          "⚠️ Could not read public financial configuration:",
+          "âš ï¸ Could not read public financial configuration:",
           error.message
         );
       }
@@ -3299,13 +3336,13 @@ const server =
           telegramWithdrawal.startTelegramWithdrawalApproval();
 
           console.log(
-            "✅ Telegram withdrawal approval started."
+            "âœ… Telegram withdrawal approval started."
           );
 
         } catch (error) {
 
           console.error(
-            "❌ Telegram withdrawal approval failed:",
+            "âŒ Telegram withdrawal approval failed:",
             error.message
           );
         }
@@ -3313,19 +3350,19 @@ const server =
       }
 
       console.log(
-        `💸 Mobile Money withdrawal service: ${
+        `ðŸ’¸ Mobile Money withdrawal service: ${
           withdrawal ? "READY" : "UNAVAILABLE"
         }`
       );
 
       console.log(
-        `📱 Telegram recharge approvals: ${
+        `ðŸ“± Telegram recharge approvals: ${
           telegramRecharge ? "READY" : "UNAVAILABLE"
         }`
       );
 
       console.log(
-        `📱 Telegram withdrawal approvals: ${
+        `ðŸ“± Telegram withdrawal approvals: ${
           telegramWithdrawal ? "READY" : "UNAVAILABLE"
         }`
       );
@@ -3339,7 +3376,7 @@ const server =
       );
 
       console.log(
-        "🟢 SAINT CRYPTO BACKEND READY"
+        "ðŸŸ¢ SAINT CRYPTO BACKEND READY"
       );
 
       console.log(
@@ -3366,20 +3403,20 @@ const server =
           ) {
 
             console.log(
-              "📱 SAINT CRYPTO BACKEND IS ONLINE alert sent to Telegram."
+              "ðŸ“± SAINT CRYPTO BACKEND IS ONLINE alert sent to Telegram."
             );
 
           } else {
 
             console.error(
-              "❌ SAINT CRYPTO BACKEND ONLINE alert was not delivered."
+              "âŒ SAINT CRYPTO BACKEND ONLINE alert was not delivered."
             );
           }
 
         } catch (error) {
 
           console.error(
-            "❌ Backend ONLINE Telegram alert failed:",
+            "âŒ Backend ONLINE Telegram alert failed:",
             error.message
           );
         }
@@ -3387,7 +3424,7 @@ const server =
       } else {
 
         console.error(
-          "❌ Telegram ONLINE alert unavailable because firebase_manager.js does not expose sendBackendOnlineAlert()."
+          "âŒ Telegram ONLINE alert unavailable because firebase_manager.js does not expose sendBackendOnlineAlert()."
         );
       }
     }
@@ -3415,7 +3452,7 @@ async function shutdown(
     true;
 
   console.log(
-    `🧹 ${signalName} received. Shutting down...`
+    `ðŸ§¹ ${signalName} received. Shutting down...`
   );
 
   // ----------------------------------------------------------
@@ -3429,7 +3466,7 @@ async function shutdown(
   } catch (error) {
 
     console.warn(
-      "⚠️ Financial processor shutdown:",
+      "âš ï¸ Financial processor shutdown:",
       error.message
     );
   }
@@ -3449,14 +3486,14 @@ async function shutdown(
       bybit.stopMarketSync();
 
       console.log(
-        "🛑 Market synchronization stopped."
+        "ðŸ›‘ Market synchronization stopped."
       );
     }
 
   } catch (error) {
 
     console.warn(
-      "⚠️ Market sync shutdown:",
+      "âš ï¸ Market sync shutdown:",
       error.message
     );
   }
@@ -3478,14 +3515,14 @@ async function shutdown(
       );
 
       console.log(
-        "🛑 Bybit WebSocket closed."
+        "ðŸ›‘ Bybit WebSocket closed."
       );
     }
 
   } catch (error) {
 
     console.warn(
-      "⚠️ Bybit WebSocket shutdown:",
+      "âš ï¸ Bybit WebSocket shutdown:",
       error.message
     );
   }
@@ -3505,14 +3542,14 @@ async function shutdown(
       await firebaseManager.shutdown();
 
       console.log(
-        "🛑 Firebase manager stopped."
+        "ðŸ›‘ Firebase manager stopped."
       );
     }
 
   } catch (error) {
 
     console.warn(
-      "⚠️ Firebase manager shutdown:",
+      "âš ï¸ Firebase manager shutdown:",
       error.message
     );
   }
@@ -3527,7 +3564,7 @@ async function shutdown(
       () => {
 
         console.log(
-          "🛑 HTTP server closed."
+          "ðŸ›‘ HTTP server closed."
         );
 
         process.exit(
@@ -3539,7 +3576,7 @@ async function shutdown(
   } catch (error) {
 
     console.error(
-      "❌ HTTP server shutdown:",
+      "âŒ HTTP server shutdown:",
       error.message
     );
 
@@ -3556,7 +3593,7 @@ async function shutdown(
     () => {
 
       console.error(
-        "⚠️ Forced shutdown after timeout."
+        "âš ï¸ Forced shutdown after timeout."
       );
 
       process.exit(
@@ -3601,7 +3638,7 @@ process.on(
   (reason) => {
 
     console.error(
-      "❌ Unhandled Promise Rejection:"
+      "âŒ Unhandled Promise Rejection:"
     );
 
     console.error(
@@ -3619,7 +3656,7 @@ process.on(
   (error) => {
 
     console.error(
-      "❌ Uncaught Exception:"
+      "âŒ Uncaught Exception:"
     );
 
     console.error(

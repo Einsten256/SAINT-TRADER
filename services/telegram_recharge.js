@@ -1,4 +1,4 @@
-/**
+﻿/**
 
 
 
@@ -42,7 +42,7 @@
 
 
 
- *        ↓
+ *        â†“
 
 
 
@@ -50,7 +50,7 @@
 
 
 
- *        ↓
+ *        â†“
 
 
 
@@ -58,7 +58,7 @@
 
 
 
- *        ↓
+ *        â†“
 
 
 
@@ -66,7 +66,7 @@
 
 
 
- *        ↓
+ *        â†“
 
 
 
@@ -74,11 +74,11 @@
 
 
 
- *     APPROVE → locked trading capital credited
+ *     APPROVE â†’ locked trading capital credited
 
 
 
- *     REJECT  → no ledger credit
+ *     REJECT  â†’ no ledger credit
 
 
 
@@ -830,7 +830,7 @@ function rechargeText(input) {
 
 
 
-    "💰 <b>SAINT CRYPTO RECHARGE</b>",
+    "ðŸ’° <b>SAINT CRYPTO RECHARGE</b>",
 
 
 
@@ -838,7 +838,7 @@ function rechargeText(input) {
 
 
 
-    `🆔 <b>ID:</b> <code>${escapeHtml(
+    `ðŸ†” <b>ID:</b> <code>${escapeHtml(
 
 
 
@@ -850,7 +850,7 @@ function rechargeText(input) {
 
 
 
-    `👤 <b>User:</b> <code>${userId}</code>`,
+    `ðŸ‘¤ <b>User:</b> <code>${userId}</code>`,
 
 
 
@@ -858,7 +858,7 @@ function rechargeText(input) {
 
 
 
-    `💵 <b>Amount:</b> ${money(
+    `ðŸ’µ <b>Amount:</b> ${money(
 
 
 
@@ -874,15 +874,15 @@ function rechargeText(input) {
 
 
 
-    `📱 <b>Network:</b> ${network}`,
+    `ðŸ“± <b>Network:</b> ${network}`,
 
 
 
-    `👤 <b>Sender:</b> ${senderName}`,
+    `ðŸ‘¤ <b>Sender:</b> ${senderName}`,
 
 
 
-    `🧾 <b>Transaction ID:</b> <code>${transactionId}</code>`,
+    `ðŸ§¾ <b>Transaction ID:</b> <code>${transactionId}</code>`,
 
 
 
@@ -890,11 +890,11 @@ function rechargeText(input) {
 
 
 
-    `📌 <b>Status:</b> ${status}`,
+    `ðŸ“Œ <b>Status:</b> ${status}`,
 
 
 
-    `📜 <b>Terms accepted:</b> ${
+    `ðŸ“œ <b>Terms accepted:</b> ${
 
 
 
@@ -910,7 +910,7 @@ function rechargeText(input) {
 
 
 
-    "⚠️ Verify the Mobile Money transaction before approving.",
+    "âš ï¸ Verify the Mobile Money transaction before approving.",
 
 
 
@@ -950,7 +950,7 @@ function rechargeKeyboard(rechargeId) {
 
 
 
-          text: "✅ APPROVE RECHARGE",
+          text: "âœ… APPROVE RECHARGE",
 
 
 
@@ -970,7 +970,7 @@ function rechargeKeyboard(rechargeId) {
 
 
 
-          text: "❌ REJECT",
+          text: "âŒ REJECT",
 
 
 
@@ -1810,7 +1810,7 @@ async function handleApprove(
 
 
 
-        "🟢 <b>APPROVED</b>",
+        "ðŸŸ¢ <b>APPROVED</b>",
 
 
 
@@ -2162,7 +2162,7 @@ async function handleReject(
 
 
 
-        "🔴 <b>REJECTED</b>",
+        "ðŸ”´ <b>REJECTED</b>",
 
 
 
@@ -3142,7 +3142,10 @@ async function startTelegramRechargeBot() {
 
     );
 
-    if (bot && typeof bot.startPolling === "function") {
+    if (env("TELEGRAM_WEBHOOK_MODE") === "true") {
+      polling = false;
+      console.log("[telegram recharge] WEBHOOK MODE ENABLED - polling disabled.");
+    } else if (bot && typeof bot.startPolling === "function") {
       Promise.resolve(bot.startPolling()).catch((error) => {
         console.error(
           "[telegram recharge] polling start failed:",
@@ -3662,6 +3665,8 @@ module.exports = {
 
 
 };
+
+
 
 
 
