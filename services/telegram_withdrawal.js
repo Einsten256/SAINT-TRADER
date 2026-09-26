@@ -86,7 +86,7 @@
 
 
 
- *      â†“
+ *      Ã¢â€ â€œ
 
 
 
@@ -102,7 +102,7 @@
 
 
 
- *      â†“
+ *      Ã¢â€ â€œ
 
 
 
@@ -118,7 +118,7 @@
 
 
 
- *      â†“
+ *      Ã¢â€ â€œ
 
 
 
@@ -126,7 +126,7 @@
 
 
 
- *   APPROVE â†’ ADMIN MANUALLY SENDS MOBILE MONEY â†’ CONFIRM DISBURSEMENT
+ *   APPROVE Ã¢â€ â€™ ADMIN MANUALLY SENDS MOBILE MONEY Ã¢â€ â€™ CONFIRM DISBURSEMENT
 
 
 
@@ -134,7 +134,7 @@
 
 
 
- *   REJECT  â†’ RESERVED AMOUNT RESTORED
+ *   REJECT  Ã¢â€ â€™ RESERVED AMOUNT RESTORED
 
 
 
@@ -2117,7 +2117,7 @@ async function handleApprove(query, withdrawalId) {
 
 
 
-      "ðŸŸ¡ \<b>ADMIN ACTION:\</b> APPROVED",
+      "Ã°Å¸Å¸Â¡ \<b>ADMIN ACTION:\</b> APPROVED",
 
 
 
@@ -2125,7 +2125,7 @@ async function handleApprove(query, withdrawalId) {
 
 
 
-      "ðŸ“² Manually send the NET amount to the number above.",
+      "Ã°Å¸â€œÂ² Manually send the NET amount to the number above.",
 
 
 
@@ -2221,7 +2221,7 @@ async function handleApprove(query, withdrawalId) {
 
 
 
-              text: "ðŸ’µ CONFIRM PAID",
+              text: "Ã°Å¸â€™Âµ CONFIRM PAID",
 
 
 
@@ -2253,7 +2253,7 @@ async function handleApprove(query, withdrawalId) {
 
 
 
-              text: "âŒ REJECT",
+              text: "Ã¢ÂÅ’ REJECT",
 
 
 
@@ -2690,7 +2690,7 @@ async function handleConfirmPaid(query, withdrawalId) {
 
 
 
-        "ðŸŸ¢ \<b>DISBURSED\</b>",
+        "Ã°Å¸Å¸Â¢ \<b>DISBURSED\</b>",
 
 
 
@@ -2706,7 +2706,7 @@ async function handleConfirmPaid(query, withdrawalId) {
 
 
 
-        `ðŸ’µ \<b>Paid:\</b> ${money(result.netAmountUgx)}`,
+        `Ã°Å¸â€™Âµ \<b>Paid:\</b> ${money(result.netAmountUgx)}`,
 
 
 
@@ -2722,7 +2722,7 @@ async function handleConfirmPaid(query, withdrawalId) {
 
 
 
-          ? `ðŸ§¾ \<b>Reference:\</b> \<code>${escapeHtml(
+          ? `Ã°Å¸Â§Â¾ \<b>Reference:\</b> \<code>${escapeHtml(
 
 
 
@@ -3254,7 +3254,7 @@ async function handleReject(query, withdrawalId) {
 
 
 
-        "ðŸ”´ \<b>REJECTED\</b>",
+        "Ã°Å¸â€Â´ \<b>REJECTED\</b>",
 
 
 
@@ -4300,6 +4300,7 @@ async function startTelegramWithdrawalBot(sharedBot = null) {
 
 
     registerHandlers();
+    console.log("[telegram withdrawal] callback_query listeners:", typeof bot.listenerCount === "function" ? bot.listenerCount("callback_query") : "listenerCount unavailable");
     setTimeout(() => resendPendingWithdrawalsOnStartup(), 1500);
 
 
