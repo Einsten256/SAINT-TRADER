@@ -554,6 +554,7 @@ const TELEGRAM_WEBHOOK_SECRET =
   process.env.TELEGRAM_WEBHOOK_SECRET || "";
 
 app.post("/api/telegram/webhook", async (req, res) => {
+  console.log("[telegram webhook] REQUEST RECEIVED", { updateId: req.body?.update_id, hasCallback: Boolean(req.body?.callback_query), callbackData: req.body?.callback_query?.data });
   try {
     if (
       TELEGRAM_WEBHOOK_SECRET &&
@@ -3684,3 +3685,5 @@ module.exports = {
 
   server,
 };
+
+
