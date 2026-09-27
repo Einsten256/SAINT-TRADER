@@ -3435,6 +3435,1307 @@ async function startBybitWebSocket() {
 }
 
 // ============================================================
+// SAINT_ADMIN_FINAL_V2
+// Complete SAINT ADMIN API layer. Inserted before app.listen().
+// Existing Saint Crypto routes/services remain untouched.
+
+// ----- finance queues -----
+app.get(
+  API_PREFIX + "/admin/finance/recharges",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const snap = await firestore.collection("recharges").limit(300).get();
+      const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const all = req.query.all === "true";
+      const recharges = all ? rows : rows.filter(x =>
+        ["PENDING_ADMIN_REVIEW", "PENDING"].includes(
+          String(x.status || "").toUpperCase()
+        )
+      );
+      return res.json({ success: true, count: recharges.length, recharges });
+    } catch (e) {
+      return res.status(500).json({
+        success: false, code: "ADMIN_RECHARGES_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+app.get(
+  API_PREFIX + "/admin/finance/withdrawals",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const snap = await firestore.collection("withdrawals").limit(300).get();
+      const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const all = req.query.all === "true";
+      const withdrawals = all ? rows : rows.filter(x =>
+        ["UNDER_REVIEW", "PENDING", "PENDING_ADMIN_REVIEW", "AWAITING_PAYMENT", "PROCESSING"]
+          .includes(String(x.status || "").toUpperCase())
+      );
+      return res.json({ success: true, count: withdrawals.length, withdrawals });
+    } catch (e) {
+      return res.status(500).json({
+        success: false, code: "ADMIN_WITHDRAWALS_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+// ----- recharge approval -----
+app.post(
+  API_PREFIX + "/admin/finance/recharges/:rechargeId/approve",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const id = String(req.params.rechargeId || "").trim();
+      if (!id) return res.status(400).json({
+        success: false, message: "Recharge ID is required."
+      });
+      if (!deposit || typeof deposit.approveRecharge !== "function") {
+        return res.status(503).json({
+          success: false, code: "RECHARGE_SERVICE_UNAVAILABLE"
+        });
+      }
+      const result = await deposit.approveRecharge(id, req.uid);
+      await firestore.collection("admin_audit_logs").add({
+        adminUid: req.uid, action: "RECHARGE_APPROVED", target: id,
+        details: result, createdAt: new Date()
+      });
+      return res.json({ success: true, message: "Recharge approved.", recharge: result });
+    } catch (e) {
+      return res.status(400).json({
+        success: false, code: "RECHARGE_APPROVAL_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+app.post(
+  API_PREFIX + "/admin/finance/recharges/:rechargeId/reject",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const id = String(req.params.rechargeId || "").trim();
+      const reason = String(req.body && req.body.reason || "Rejected by SAINT ADMIN.")
+        .trim().slice(0, 500);
+      if (!id) return res.status(400).json({
+        success: false, message: "Recharge ID is required."
+      });
+      if (!deposit || typeof deposit.rejectRecharge !== "function") {
+        return res.status(503).json({
+          success: false, code: "RECHARGE_SERVICE_UNAVAILABLE"
+        });
+      }
+      const result = await deposit.rejectRecharge(id, req.uid, reason);
+      await firestore.collection("admin_audit_logs").add({
+        adminUid: req.uid, action: "RECHARGE_REJECTED", target: id,
+        details: { reason, result }, createdAt: new Date()
+      });
+      return res.json({ success: true, message: "Recharge rejected.", recharge: result });
+    } catch (e) {
+      return res.status(400).json({
+        success: false, code: "RECHARGE_REJECTION_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+// ----- withdrawal approval / rejection -----
+app.post(
+  API_PREFIX + "/admin/finance/withdrawals/:withdrawalId/approve",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const id = String(req.params.withdrawalId || "").trim();
+      if (!id) return res.status(400).json({
+        success: false, message: "Withdrawal ID is required."
+      });
+      if (!withdrawal || typeof withdrawal.approveAndDisburseWithdrawal !== "function") {
+        return res.status(503).json({
+          success: false, code: "WITHDRAWAL_SERVICE_UNAVAILABLE"
+        });
+      }
+      const result = await withdrawal.approveAndDisburseWithdrawal({
+        withdrawalId: id,
+        paymentReference: String(req.body && req.body.paymentReference ||
+          "SAINT_ADMIN_MM_" + Date.now()).trim(),
+        adminId: req.uid,
+        adminNote: String(req.body && req.body.adminNote || "").trim().slice(0, 500)
+      });
+      await firestore.collection("admin_audit_logs").add({
+        adminUid: req.uid, action: "WITHDRAWAL_APPROVED", target: id,
+        details: result, createdAt: new Date()
+      });
+      return res.json({ success: true, withdrawal: result });
+    } catch (e) {
+      return res.status(400).json({
+        success: false, code: "WITHDRAWAL_APPROVAL_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+app.post(
+  API_PREFIX + "/admin/finance/withdrawals/:withdrawalId/reject",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const id = String(req.params.withdrawalId || "").trim();
+      const reason = String(req.body && req.body.reason || "Rejected by SAINT ADMIN.")
+        .trim().slice(0, 500);
+      if (!id) return res.status(400).json({
+        success: false, message: "Withdrawal ID is required."
+      });
+      if (!withdrawal || typeof withdrawal.rejectWithdrawal !== "function") {
+        return res.status(503).json({
+          success: false, code: "WITHDRAWAL_SERVICE_UNAVAILABLE"
+        });
+      }
+      const result = await withdrawal.rejectWithdrawal({
+        withdrawalId: id,
+        adminId: req.uid,
+        reason
+      });
+      await firestore.collection("admin_audit_logs").add({
+        adminUid: req.uid, action: "WITHDRAWAL_REJECTED", target: id,
+        details: { reason, result }, createdAt: new Date()
+      });
+      return res.json({ success: true, withdrawal: result });
+    } catch (e) {
+      return res.status(400).json({
+        success: false, code: "WITHDRAWAL_REJECTION_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+// ----- user detail / freeze -----
+app.get(
+  API_PREFIX + "/admin/users/:userId",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const id = String(req.params.userId || "").trim();
+      const doc = await firestore.collection("users").doc(id).get();
+      if (!doc.exists) return res.status(404).json({
+        success: false, code: "USER_NOT_FOUND"
+      });
+      const read = async name => {
+        const snap = await firestore.collection(name).limit(300).get();
+        return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+          .filter(x => String(x.userId || x.uid || "") === id);
+      };
+      const [recharges, withdrawals, signals] = await Promise.all([
+        read("recharges"), read("withdrawals"), read("signal_redemptions")
+      ]);
+      return res.json({
+        success: true,
+        user: { id: doc.id, ...doc.data() },
+        recharges, withdrawals, signalHistory: signals
+      });
+    } catch (e) {
+      return res.status(500).json({
+        success: false, code: "USER_DETAIL_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+app.post(
+  API_PREFIX + "/admin/users/:userId/freeze",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const id = String(req.params.userId || "").trim();
+      await firestore.collection("users").doc(id).set({
+        is_frozen: true,
+        status: "FROZEN",
+        freezeReason: String(req.body && req.body.reason || "Frozen by SAINT ADMIN.")
+          .slice(0, 500),
+        updatedAt: new Date()
+      }, { merge: true });
+      await firestore.collection("admin_audit_logs").add({
+        adminUid: req.uid, action: "USER_FROZEN", target: id,
+        details: req.body || {}, createdAt: new Date()
+      });
+      return res.json({ success: true, message: "User frozen." });
+    } catch (e) {
+      return res.status(500).json({
+        success: false, code: "USER_FREEZE_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+app.post(
+  API_PREFIX + "/admin/users/:userId/unfreeze",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const id = String(req.params.userId || "").trim();
+      await firestore.collection("users").doc(id).set({
+        is_frozen: false, status: "ACTIVE", freezeReason: null, updatedAt: new Date()
+      }, { merge: true });
+      await firestore.collection("admin_audit_logs").add({
+        adminUid: req.uid, action: "USER_UNFROZEN", target: id,
+        details: {}, createdAt: new Date()
+      });
+      return res.json({ success: true, message: "User unfrozen." });
+    } catch (e) {
+      return res.status(500).json({
+        success: false, code: "USER_UNFREEZE_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+// ----- system controls -----
+app.get(
+  API_PREFIX + "/admin/system/status",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      let c = {};
+      if (realtimeDb) {
+        const snap = await realtimeDb.ref("system_control").once("value");
+        c = snap.val() || {};
+      }
+
+      let signalStatus = null;
+      let schedulerStatus = null;
+
+      try {
+        if (signal && typeof signal.getStatus === "function") {
+          signalStatus = await signal.getStatus();
+        }
+      } catch (error) {
+        signalStatus = {
+          success: false,
+          error: error.message,
+        };
+      }
+
+      try {
+        if (scheduler && typeof scheduler.getStatus === "function") {
+          schedulerStatus = await scheduler.getStatus();
+        }
+      } catch (error) {
+        schedulerStatus = {
+          success: false,
+          error: error.message,
+        };
+      }
+
+      return res.json({
+        success: true,
+        backend: "ONLINE",
+        firebase: Boolean(firebaseReady),
+        firestore: Boolean(firestore),
+        realtimeDb: Boolean(realtimeDb),
+        tradingFrozen: c.trading_frozen === true,
+        withdrawalsFrozen: c.withdrawals_frozen === true,
+        rechargeFrozen: c.recharge_frozen === true,
+        signalFrozen: c.signal_frozen === true,
+        maintenance: c.maintenance === true,
+        announcement: String(c.announcement || ""),
+        signal: signalStatus,
+        scheduler: schedulerStatus,
+        updatedAt: c.updatedAt || null,
+        updatedBy: c.updatedBy || null,
+      });
+    } catch (e) {
+      return res.status(500).json({
+        success: false, code: "SYSTEM_STATUS_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+app.post(
+  API_PREFIX + "/admin/system/control",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      if (!realtimeDb) return res.status(503).json({
+        success: false, message: "Realtime Database unavailable."
+      });
+
+      const body = req.body || {};
+      const u = {
+        updatedAt: new Date().toISOString(),
+        updatedBy: req.uid,
+      };
+
+      if (typeof body.tradingFrozen === "boolean")
+        u.trading_frozen = body.tradingFrozen;
+      if (typeof body.withdrawalsFrozen === "boolean")
+        u.withdrawals_frozen = body.withdrawalsFrozen;
+      if (typeof body.rechargeFrozen === "boolean")
+        u.recharge_frozen = body.rechargeFrozen;
+      if (typeof body.signalFrozen === "boolean")
+        u.signal_frozen = body.signalFrozen;
+      if (typeof body.maintenance === "boolean")
+        u.maintenance = body.maintenance;
+      if (body.announcement !== undefined)
+        u.announcement = String(body.announcement || "").slice(0, 1000);
+
+      const mutableKeys = [
+        "trading_frozen",
+        "withdrawals_frozen",
+        "recharge_frozen",
+        "signal_frozen",
+        "maintenance",
+        "announcement",
+      ];
+
+      const changed = mutableKeys.filter((key) =>
+        Object.prototype.hasOwnProperty.call(u, key)
+      );
+
+      if (changed.length === 0) {
+        return res.status(400).json({
+          success: false,
+          code: "NO_CONTROL_CHANGE",
+          message: "No supported system control was supplied.",
+        });
+      }
+
+      await realtimeDb.ref("system_control").update(u);
+
+      await firestore.collection("admin_audit_logs").add({
+        adminUid: req.uid,
+        action: "SYSTEM_CONTROL_UPDATE",
+        target: "system_control",
+        details: u,
+        createdAt: new Date(),
+      });
+
+      return res.json({
+        success: true,
+        controls: u,
+      });
+    } catch (e) {
+      return res.status(500).json({
+        success: false, code: "SYSTEM_CONTROL_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+// ----- payout balance adjustment (rewards / deductions) -----
+app.post(
+  API_PREFIX + "/admin/finance/adjust-balance",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const userId = String(
+        req.body?.userId ||
+        req.body?.uid ||
+        ""
+      ).trim();
+
+      const amountUgx = Number(
+        req.body?.amountUgx ??
+        req.body?.amount ??
+        0
+      );
+
+      const action = String(
+        req.body?.action ||
+        "CREDIT"
+      )
+        .trim()
+        .toUpperCase();
+
+      const reason = String(
+        req.body?.reason ||
+        ""
+      )
+        .trim()
+        .slice(0, 500);
+
+      if (!userId) {
+        return res.status(400).json({
+          success: false,
+          code: "USER_ID_REQUIRED",
+          message: "User ID is required.",
+        });
+      }
+
+      const roundedAmount = Math.round(
+        amountUgx
+      );
+
+      if (
+        !Number.isSafeInteger(
+          roundedAmount
+        ) ||
+        roundedAmount <= 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "INVALID_AMOUNT",
+          message:
+            "Enter a valid positive UGX amount.",
+        });
+      }
+
+      if (
+        action !== "CREDIT" &&
+        action !== "DEDUCT"
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "INVALID_ACTION",
+          message:
+            "Action must be CREDIT or DEDUCT.",
+        });
+      }
+
+      if (!reason) {
+        return res.status(400).json({
+          success: false,
+          code: "REASON_REQUIRED",
+          message:
+            "A reason is required.",
+        });
+      }
+
+      if (
+        !ledger ||
+        typeof ledger.adjustPayoutBalance !==
+          "function"
+      ) {
+        return res.status(503).json({
+          success: false,
+          code:
+            "LEDGER_ADJUSTMENT_UNAVAILABLE",
+          message:
+            "Ledger adjustment service is unavailable.",
+        });
+      }
+
+      const result =
+        await ledger.adjustPayoutBalance({
+          userId,
+          amountUgx: roundedAmount,
+          direction:
+            action === "CREDIT"
+              ? "CREDIT"
+              : "DEBIT",
+          adminId: req.uid,
+          reason,
+        });
+
+      await firestore
+        .collection("admin_audit_logs")
+        .add({
+          adminUid: req.uid,
+          action:
+            action === "CREDIT"
+              ? "PAYOUT_BALANCE_CREDITED"
+              : "PAYOUT_BALANCE_DEDUCTED",
+          target: userId,
+          details: {
+            reason,
+            result,
+          },
+          createdAt: new Date(),
+        });
+
+      return res.json({
+        success: true,
+        message:
+          action === "CREDIT"
+            ? "Payout balance credited."
+            : "Payout balance deducted.",
+        adjustment: result,
+      });
+    } catch (e) {
+      return res.status(400).json({
+        success: false,
+        code:
+          "PAYOUT_BALANCE_ADJUSTMENT_FAILED",
+        message: e.message,
+      });
+    }
+  }
+);
+// ----- ledger history for SAINT ADMIN -----
+app.get(
+  API_PREFIX + "/admin/finance/ledger",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const rawLimit = Number.parseInt(String(req.query.limit || "300"), 10);
+      const limit = Number.isFinite(rawLimit)
+        ? Math.min(Math.max(rawLimit, 1), 500)
+        : 300;
+
+      const snap = await firestore
+        .collection("ledger_transactions")
+        .limit(limit)
+        .get();
+
+      const transactions = snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      }));
+
+      transactions.sort((a, b) => {
+        const aTime = a.createdAt?.toMillis?.() || 0;
+        const bTime = b.createdAt?.toMillis?.() || 0;
+        return bTime - aTime;
+      });
+
+      return res.json({
+        success: true,
+        count: transactions.length,
+        transactions,
+      });
+    } catch (e) {
+      return res.status(500).json({
+        success: false,
+        code: "ADMIN_LEDGER_FAILED",
+        message: e.message,
+      });
+    }
+  }
+);
+// ----- audit -----
+app.get(
+  API_PREFIX + "/admin/audit",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const parsedLimit = Number.parseInt(
+        String(req.query.limit || "300"),
+        10
+      );
+
+      const limit = Number.isFinite(parsedLimit)
+        ? Math.min(Math.max(parsedLimit, 1), 1000)
+        : 300;
+
+      const actionFilter = String(
+        req.query.action || ""
+      ).trim().toUpperCase();
+
+      const adminFilter = String(
+        req.query.adminUid || ""
+      ).trim();
+
+      const targetFilter = String(
+        req.query.target || ""
+      ).trim();
+
+      const snap = await firestore
+        .collection("admin_audit_logs")
+        .limit(Math.max(limit, 300))
+        .get();
+
+      const toMillis = (value) => {
+        if (!value) return 0;
+
+        if (
+          value &&
+          typeof value.toMillis === "function"
+        ) {
+          return value.toMillis();
+        }
+
+        if (value instanceof Date) {
+          return value.getTime();
+        }
+
+        const parsed = Date.parse(
+          String(value)
+        );
+
+        return Number.isFinite(parsed)
+          ? parsed
+          : 0;
+      };
+
+      let logs = snap.docs
+        .map((d) => ({
+          id: d.id,
+          ...d.data(),
+        }))
+        .sort(
+          (a, b) =>
+            toMillis(b.createdAt) -
+            toMillis(a.createdAt)
+        );
+
+      if (actionFilter) {
+        logs = logs.filter(
+          (x) =>
+            String(x.action || "")
+              .toUpperCase() ===
+            actionFilter
+        );
+      }
+
+      if (adminFilter) {
+        logs = logs.filter(
+          (x) =>
+            String(x.adminUid || "") ===
+            adminFilter
+        );
+      }
+
+      if (targetFilter) {
+        logs = logs.filter(
+          (x) =>
+            String(x.target || "") ===
+            targetFilter
+        );
+      }
+
+      logs = logs.slice(0, limit);
+
+      return res.json({
+        success: true,
+        count: logs.length,
+        filters: {
+          action: actionFilter || null,
+          adminUid: adminFilter || null,
+          target: targetFilter || null,
+        },
+        logs,
+      });
+    } catch (e) {
+      return res.status(500).json({
+        success: false,
+        code: "AUDIT_FAILED",
+        message: e.message,
+      });
+    }
+  }
+);
+
+// ----- signals -----// ----- signals -----
+app.get(
+  API_PREFIX + "/admin/signals",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const rawLimit = Number.parseInt(String(req.query.limit || "200"), 10);
+      const limit = Number.isFinite(rawLimit)
+        ? Math.min(Math.max(rawLimit, 1), 500)
+        : 200;
+
+      const snap = await firestore.collection("signals").limit(limit).get();
+      const signals = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      signals.sort((a, b) => {
+        const aTime = a.createdAt?.toMillis?.() || Date.parse(a.createdAt || "") || 0;
+        const bTime = b.createdAt?.toMillis?.() || Date.parse(b.createdAt || "") || 0;
+        return bTime - aTime;
+      });
+
+      return res.json({
+        success: true,
+        count: signals.length,
+        signals,
+      });
+    } catch (e) {
+      return res.status(500).json({
+        success: false, code: "SIGNALS_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+app.get(
+  API_PREFIX + "/admin/signals/status",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      let signalStatus = {
+        success: false,
+        error: "Signal service unavailable.",
+      };
+      let schedulerStatus = {
+        success: false,
+        error: "Scheduler unavailable.",
+      };
+
+      if (signal && typeof signal.getStatus === "function") {
+        signalStatus = await signal.getStatus();
+      }
+
+      if (scheduler && typeof scheduler.getStatus === "function") {
+        schedulerStatus = await scheduler.getStatus();
+      }
+
+      return res.json({
+        success: true,
+        signal: signalStatus,
+        scheduler: schedulerStatus,
+      });
+    } catch (e) {
+      return res.status(500).json({
+        success: false, code: "SIGNAL_STATUS_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+app.get(
+  API_PREFIX + "/admin/signals/redemptions",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const rawLimit = Number.parseInt(String(req.query.limit || "300"), 10);
+      const limit = Number.isFinite(rawLimit)
+        ? Math.min(Math.max(rawLimit, 1), 500)
+        : 300;
+
+      const userId = String(req.query.userId || "").trim();
+      const requestedStatus = String(req.query.status || "").trim().toUpperCase();
+
+      const snap = await firestore
+        .collection("signal_redemptions")
+        .limit(limit)
+        .get();
+
+      let redemptions = snap.docs.map(d => ({
+        id: d.id,
+        redemptionId: d.id,
+        ...d.data(),
+      }));
+
+      if (userId) {
+        redemptions = redemptions.filter(x =>
+          String(x.userId || x.uid || "") === userId
+        );
+      }
+
+      if (requestedStatus) {
+        redemptions = redemptions.filter(x =>
+          String(x.status || "").toUpperCase() === requestedStatus
+        );
+      }
+
+      redemptions.sort((a, b) => {
+        const aTime = a.createdAt?.toMillis?.() || Date.parse(a.createdAt || "") || 0;
+        const bTime = b.createdAt?.toMillis?.() || Date.parse(b.createdAt || "") || 0;
+        return bTime - aTime;
+      });
+
+      return res.json({
+        success: true,
+        count: redemptions.length,
+        redemptions,
+      });
+    } catch (e) {
+      return res.status(500).json({
+        success: false, code: "SIGNAL_REDEMPTIONS_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+app.post(
+  API_PREFIX + "/admin/signals/generate",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      if (!signal || typeof signal.createSignal !== "function") {
+        return res.status(503).json({
+          success: false,
+          code: "SIGNAL_SERVICE_UNAVAILABLE",
+          message: "Signal service is unavailable.",
+        });
+      }
+
+      const session = String(
+        req.body?.session ||
+        "SAINT ADMIN MANUAL"
+      ).trim().slice(0, 80);
+
+      const result = await signal.createSignal({
+        force: true,
+        createdBy: req.uid,
+        session,
+      });
+
+      await firestore.collection("admin_audit_logs").add({
+        adminUid: req.uid,
+        action: result?.alreadyExists
+          ? "SIGNAL_GENERATION_ALREADY_EXISTS"
+          : "SIGNAL_GENERATED_MANUALLY",
+        target: result?.signal?.code || null,
+        details: {
+          session,
+          result,
+        },
+        createdAt: new Date(),
+      });
+
+      return res.status(result?.alreadyExists ? 200 : 201).json({
+        success: true,
+        alreadyExists: result?.alreadyExists === true,
+        message: result?.alreadyExists
+          ? "Today's signal already exists."
+          : "Signal created successfully.",
+        signal: result?.signal || result,
+      });
+    } catch (e) {
+      return res.status(400).json({
+        success: false,
+        code: "SIGNAL_GENERATION_FAILED",
+        message: e.message,
+      });
+    }
+  }
+);
+
+// ----- reports -----
+app.get(
+  API_PREFIX + "/admin/reports",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const parsedLimit = Number.parseInt(
+        String(req.query.limit || "1000"),
+        10
+      );
+
+      const limit = Number.isFinite(parsedLimit)
+        ? Math.min(Math.max(parsedLimit, 100), 3000)
+        : 1000;
+
+      const period = String(
+        req.query.period || "all"
+      )
+        .trim()
+        .toLowerCase();
+
+      if (
+        ![
+          "all",
+          "today",
+          "week",
+          "month",
+        ].includes(period)
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "INVALID_REPORT_PERIOD",
+          message:
+            "period must be all, today, week, or month.",
+        });
+      }
+
+      const now = new Date();
+      let fromMs = null;
+      let toMs = now.getTime();
+
+      if (req.query.from) {
+        const parsed = Date.parse(
+          String(req.query.from)
+        );
+
+        if (!Number.isFinite(parsed)) {
+          return res.status(400).json({
+            success: false,
+            code: "INVALID_REPORT_FROM",
+            message:
+              "The from date is invalid.",
+          });
+        }
+
+        fromMs = parsed;
+      }
+
+      if (req.query.to) {
+        const parsed = Date.parse(
+          String(req.query.to)
+        );
+
+        if (!Number.isFinite(parsed)) {
+          return res.status(400).json({
+            success: false,
+            code: "INVALID_REPORT_TO",
+            message:
+              "The to date is invalid.",
+          });
+        }
+
+        toMs = parsed;
+      }
+
+      if (
+        req.query.from &&
+        req.query.to &&
+        fromMs > toMs
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "INVALID_REPORT_RANGE",
+          message:
+            "The from date cannot be after the to date.",
+        });
+      }
+
+      if (
+        !req.query.from &&
+        !req.query.to
+      ) {
+        if (period === "today") {
+          const d = new Date();
+          d.setHours(0, 0, 0, 0);
+          fromMs = d.getTime();
+        } else if (period === "week") {
+          const d = new Date();
+          const day = d.getDay();
+          const mondayOffset =
+            day === 0
+              ? -6
+              : 1 - day;
+
+          d.setDate(
+            d.getDate() +
+              mondayOffset
+          );
+
+          d.setHours(0, 0, 0, 0);
+          fromMs = d.getTime();
+        } else if (period === "month") {
+          const d = new Date(
+            now.getFullYear(),
+            now.getMonth(),
+            1
+          );
+
+          fromMs = d.getTime();
+        }
+      }
+
+      const [
+        usersSnapshot,
+        rechargesSnapshot,
+        withdrawalsSnapshot,
+        rewardsSnapshot,
+      ] = await Promise.all([
+        firestore
+          .collection("users")
+          .limit(limit)
+          .get(),
+
+        firestore
+          .collection("recharges")
+          .limit(limit)
+          .get(),
+
+        firestore
+          .collection("withdrawals")
+          .limit(limit)
+          .get(),
+
+        firestore
+          .collection("signal_redemptions")
+          .limit(limit)
+          .get(),
+      ]);
+
+      const toMillis = (value) => {
+        if (!value) return 0;
+
+        if (
+          value &&
+          typeof value.toMillis === "function"
+        ) {
+          return value.toMillis();
+        }
+
+        if (value instanceof Date) {
+          return value.getTime();
+        }
+
+        const parsed = Date.parse(
+          String(value)
+        );
+
+        return Number.isFinite(parsed)
+          ? parsed
+          : 0;
+      };
+
+      const inRange = (row) => {
+        if (
+          period === "all" &&
+          fromMs === null &&
+          !req.query.from &&
+          !req.query.to
+        ) {
+          return true;
+        }
+
+        const created =
+          toMillis(row.createdAt) ||
+          toMillis(row.created_at) ||
+          toMillis(row.updatedAt) ||
+          toMillis(row.updated_at);
+
+        if (!created) {
+          return false;
+        }
+
+        if (
+          fromMs !== null &&
+          created < fromMs
+        ) {
+          return false;
+        }
+
+        if (
+          toMs !== null &&
+          created > toMs
+        ) {
+          return false;
+        }
+
+        return true;
+      };
+
+      const num = (...values) => {
+        for (const value of values) {
+          const number = Number(value);
+
+          if (Number.isFinite(number)) {
+            return number;
+          }
+        }
+
+        return 0;
+      };
+
+      const users =
+        usersSnapshot.docs.map(
+          (d) => d.data()
+        );
+
+      const recharges =
+        rechargesSnapshot.docs
+          .map((d) => d.data())
+          .filter(inRange);
+
+      const withdrawals =
+        withdrawalsSnapshot.docs
+          .map((d) => d.data())
+          .filter(inRange);
+
+      const rewards =
+        rewardsSnapshot.docs
+          .map((d) => d.data())
+          .filter(inRange);
+
+      const approvedRecharges =
+        recharges.filter(
+          (x) =>
+            String(
+              x.status || ""
+            ).toUpperCase() ===
+            "APPROVED"
+        );
+
+      const paidWithdrawals =
+        withdrawals.filter(
+          (x) =>
+            [
+              "PAID",
+              "DISBURSED",
+              "COMPLETED",
+            ].includes(
+              String(
+                x.status || ""
+              ).toUpperCase()
+            )
+        );
+
+      const completedRewards =
+        rewards.filter((x) => {
+          const status = String(
+            x.status || ""
+          ).toUpperCase();
+
+          const settlementStatus =
+            String(
+              x.settlementStatus || ""
+            ).toUpperCase();
+
+          return (
+            status === "COMPLETED" ||
+            settlementStatus ===
+              "COMPLETED"
+          );
+        });
+
+      return res.json({
+        success: true,
+
+        period: {
+          name: period,
+
+          from:
+            fromMs !== null
+              ? new Date(
+                  fromMs
+                ).toISOString()
+              : null,
+
+          to:
+            toMs !== null
+              ? new Date(
+                  toMs
+                ).toISOString()
+              : null,
+        },
+
+        users: {
+          total:
+            users.length,
+
+          frozen:
+            users.filter(
+              (x) =>
+                x.is_frozen === true
+            ).length,
+
+          active:
+            users.filter(
+              (x) =>
+                x.is_frozen !== true
+            ).length,
+        },
+
+        finance: {
+          rechargeCount:
+            recharges.length,
+
+          approvedRechargeCount:
+            approvedRecharges.length,
+
+          approvedRechargeUgx:
+            Math.round(
+              approvedRecharges.reduce(
+                (sum, x) =>
+                  sum +
+                  num(
+                    x.amountUgx,
+                    x.amount_ugx,
+                    x.amount
+                  ),
+                0
+              )
+            ),
+
+          withdrawalCount:
+            withdrawals.length,
+
+          paidWithdrawalCount:
+            paidWithdrawals.length,
+
+          paidWithdrawalUgx:
+            Math.round(
+              paidWithdrawals.reduce(
+                (sum, x) =>
+                  sum +
+                  num(
+                    x.netAmountUgx,
+                    x.netPayout,
+                    x.amountUgx,
+                    x.amount_ugx,
+                    x.amount
+                  ),
+                0
+              )
+            ),
+
+          completedRewardCount:
+            completedRewards.length,
+
+          rewardsCreditedUgx:
+            Math.round(
+              completedRewards.reduce(
+                (sum, x) =>
+                  sum +
+                  num(
+                    x.rewardUgx,
+                    x.reward,
+                    x.signalProfit,
+                    x.profit,
+                    x.amount
+                  ),
+                0
+              )
+            ),
+        },
+
+        generatedAt:
+          new Date().toISOString(),
+      });
+    } catch (e) {
+      return res.status(500).json({
+        success: false,
+        code: "REPORTS_FAILED",
+        message: e.message,
+      });
+    }
+  }
+);
+
+// ----- MT5 registry / command queue -----// ----- MT5 registry / command queue -----
+app.get(
+  API_PREFIX + "/admin/mt5/accounts",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const snap = await firestore.collection("mt5_accounts").limit(200).get();
+      return res.json({
+        success: true,
+        count: snap.size,
+        accounts: snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      });
+    } catch (e) {
+      return res.status(500).json({
+        success: false, code: "MT5_ACCOUNTS_FAILED", message: e.message
+      });
+    }
+  }
+);
+
+app.post(
+  API_PREFIX + "/admin/mt5/accounts/:accountId/command",
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const accountId = String(req.params.accountId || "").trim();
+      const command = String(req.body && req.body.command || "").trim().toUpperCase();
+      if (!accountId || !["START_BOT","STOP_BOT","CLOSE_ALL","REFRESH"].includes(command))
+        return res.status(400).json({ success: false, message: "Invalid MT5 command." });
+      const ref = await firestore.collection("mt5_commands").add({
+        accountId, command, status: "PENDING", createdAt: new Date(), createdBy: req.uid
+      });
+      await firestore.collection("admin_audit_logs").add({
+        adminUid: req.uid, action: "MT5_COMMAND", target: accountId,
+        details: { command, commandId: ref.id }, createdAt: new Date()
+      });
+      return res.json({ success: true, commandId: ref.id });
+    } catch (e) {
+      return res.status(500).json({
+        success: false, code: "MT5_COMMAND_FAILED", message: e.message
+      });
+    }
+  }
+);
+
 // 43. 404 HANDLER
 // ============================================================
 
@@ -3581,439 +4882,6 @@ app.use(
 // 45. SERVER
 // ============================================================
 
-
-// SAINT_ADMIN_FINAL_V2
-// Complete SAINT ADMIN API layer. Inserted before app.listen().
-// Existing Saint Crypto routes/services remain untouched.
-
-// ----- finance queues -----
-app.get(
-  API_PREFIX + "/admin/finance/recharges",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      const snap = await firestore.collection("recharges").limit(300).get();
-      const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      const all = req.query.all === "true";
-      const recharges = all ? rows : rows.filter(x =>
-        ["PENDING_ADMIN_REVIEW", "PENDING"].includes(
-          String(x.status || "").toUpperCase()
-        )
-      );
-      return res.json({ success: true, count: recharges.length, recharges });
-    } catch (e) {
-      return res.status(500).json({
-        success: false, code: "ADMIN_RECHARGES_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-app.get(
-  API_PREFIX + "/admin/finance/withdrawals",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      const snap = await firestore.collection("withdrawals").limit(300).get();
-      const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      const all = req.query.all === "true";
-      const withdrawals = all ? rows : rows.filter(x =>
-        ["PENDING", "PENDING_ADMIN_REVIEW", "AWAITING_PAYMENT", "PROCESSING"]
-          .includes(String(x.status || "").toUpperCase())
-      );
-      return res.json({ success: true, count: withdrawals.length, withdrawals });
-    } catch (e) {
-      return res.status(500).json({
-        success: false, code: "ADMIN_WITHDRAWALS_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-// ----- recharge approval -----
-app.post(
-  API_PREFIX + "/admin/finance/recharges/:rechargeId/approve",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      const id = String(req.params.rechargeId || "").trim();
-      if (!id) return res.status(400).json({
-        success: false, message: "Recharge ID is required."
-      });
-      if (!deposit || typeof deposit.approveRecharge !== "function") {
-        return res.status(503).json({
-          success: false, code: "RECHARGE_SERVICE_UNAVAILABLE"
-        });
-      }
-      const result = await deposit.approveRecharge(id, req.uid);
-      await firestore.collection("admin_audit_logs").add({
-        adminUid: req.uid, action: "RECHARGE_APPROVED", target: id,
-        details: result, createdAt: new Date()
-      });
-      return res.json({ success: true, message: "Recharge approved.", recharge: result });
-    } catch (e) {
-      return res.status(400).json({
-        success: false, code: "RECHARGE_APPROVAL_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-app.post(
-  API_PREFIX + "/admin/finance/recharges/:rechargeId/reject",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      const id = String(req.params.rechargeId || "").trim();
-      const reason = String(req.body && req.body.reason || "Rejected by SAINT ADMIN.")
-        .trim().slice(0, 500);
-      if (!id) return res.status(400).json({
-        success: false, message: "Recharge ID is required."
-      });
-      if (!deposit || typeof deposit.rejectRecharge !== "function") {
-        return res.status(503).json({
-          success: false, code: "RECHARGE_SERVICE_UNAVAILABLE"
-        });
-      }
-      const result = await deposit.rejectRecharge(id, req.uid, reason);
-      await firestore.collection("admin_audit_logs").add({
-        adminUid: req.uid, action: "RECHARGE_REJECTED", target: id,
-        details: { reason, result }, createdAt: new Date()
-      });
-      return res.json({ success: true, message: "Recharge rejected.", recharge: result });
-    } catch (e) {
-      return res.status(400).json({
-        success: false, code: "RECHARGE_REJECTION_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-// ----- withdrawal approval / rejection -----
-app.post(
-  API_PREFIX + "/admin/finance/withdrawals/:withdrawalId/approve",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      const id = String(req.params.withdrawalId || "").trim();
-      if (!id) return res.status(400).json({
-        success: false, message: "Withdrawal ID is required."
-      });
-      if (!withdrawal || typeof withdrawal.approveAndDisburseWithdrawal !== "function") {
-        return res.status(503).json({
-          success: false, code: "WITHDRAWAL_SERVICE_UNAVAILABLE"
-        });
-      }
-      const result = await withdrawal.approveAndDisburseWithdrawal(id, {
-        paymentReference: String(req.body && req.body.paymentReference ||
-          "SAINT_ADMIN_MM_" + Date.now()).trim(),
-        adminId: req.uid,
-        adminUsername: "SAINT ADMIN"
-      });
-      await firestore.collection("admin_audit_logs").add({
-        adminUid: req.uid, action: "WITHDRAWAL_APPROVED", target: id,
-        details: result, createdAt: new Date()
-      });
-      return res.json({ success: true, withdrawal: result });
-    } catch (e) {
-      return res.status(400).json({
-        success: false, code: "WITHDRAWAL_APPROVAL_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-app.post(
-  API_PREFIX + "/admin/finance/withdrawals/:withdrawalId/reject",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      const id = String(req.params.withdrawalId || "").trim();
-      const reason = String(req.body && req.body.reason || "Rejected by SAINT ADMIN.")
-        .trim().slice(0, 500);
-      if (!id) return res.status(400).json({
-        success: false, message: "Withdrawal ID is required."
-      });
-      if (!withdrawal || typeof withdrawal.rejectWithdrawal !== "function") {
-        return res.status(503).json({
-          success: false, code: "WITHDRAWAL_SERVICE_UNAVAILABLE"
-        });
-      }
-      const result = await withdrawal.rejectWithdrawal(id, reason);
-      await firestore.collection("admin_audit_logs").add({
-        adminUid: req.uid, action: "WITHDRAWAL_REJECTED", target: id,
-        details: { reason, result }, createdAt: new Date()
-      });
-      return res.json({ success: true, withdrawal: result });
-    } catch (e) {
-      return res.status(400).json({
-        success: false, code: "WITHDRAWAL_REJECTION_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-// ----- user detail / freeze -----
-app.get(
-  API_PREFIX + "/admin/users/:userId",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      const id = String(req.params.userId || "").trim();
-      const doc = await firestore.collection("users").doc(id).get();
-      if (!doc.exists) return res.status(404).json({
-        success: false, code: "USER_NOT_FOUND"
-      });
-      const read = async name => {
-        const snap = await firestore.collection(name).limit(300).get();
-        return snap.docs.map(d => ({ id: d.id, ...d.data() }))
-          .filter(x => String(x.userId || x.uid || "") === id);
-      };
-      const [recharges, withdrawals, signals] = await Promise.all([
-        read("recharges"), read("withdrawals"), read("signal_redemptions")
-      ]);
-      return res.json({
-        success: true,
-        user: { id: doc.id, ...doc.data() },
-        recharges, withdrawals, signalHistory: signals
-      });
-    } catch (e) {
-      return res.status(500).json({
-        success: false, code: "USER_DETAIL_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-app.post(
-  API_PREFIX + "/admin/users/:userId/freeze",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      const id = String(req.params.userId || "").trim();
-      await firestore.collection("users").doc(id).set({
-        is_frozen: true,
-        status: "FROZEN",
-        freezeReason: String(req.body && req.body.reason || "Frozen by SAINT ADMIN.")
-          .slice(0, 500),
-        updatedAt: new Date()
-      }, { merge: true });
-      await firestore.collection("admin_audit_logs").add({
-        adminUid: req.uid, action: "USER_FROZEN", target: id,
-        details: req.body || {}, createdAt: new Date()
-      });
-      return res.json({ success: true, message: "User frozen." });
-    } catch (e) {
-      return res.status(500).json({
-        success: false, code: "USER_FREEZE_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-app.post(
-  API_PREFIX + "/admin/users/:userId/unfreeze",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      const id = String(req.params.userId || "").trim();
-      await firestore.collection("users").doc(id).set({
-        is_frozen: false, status: "ACTIVE", freezeReason: null, updatedAt: new Date()
-      }, { merge: true });
-      await firestore.collection("admin_audit_logs").add({
-        adminUid: req.uid, action: "USER_UNFROZEN", target: id,
-        details: {}, createdAt: new Date()
-      });
-      return res.json({ success: true, message: "User unfrozen." });
-    } catch (e) {
-      return res.status(500).json({
-        success: false, code: "USER_UNFREEZE_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-// ----- system controls -----
-app.get(
-  API_PREFIX + "/admin/system/status",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      let c = {};
-      if (realtimeDb) {
-        const snap = await realtimeDb.ref("system_control").once("value");
-        c = snap.val() || {};
-      }
-      return res.json({
-        success: true, backend: "ONLINE",
-        firebase: Boolean(firebaseReady),
-        firestore: Boolean(firestore),
-        realtimeDb: Boolean(realtimeDb),
-        tradingFrozen: c.trading_frozen === true,
-        withdrawalsFrozen: c.withdrawals_frozen === true,
-        maintenance: c.maintenance === true,
-        announcement: String(c.announcement || "")
-      });
-    } catch (e) {
-      return res.status(500).json({
-        success: false, code: "SYSTEM_STATUS_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-app.post(
-  API_PREFIX + "/admin/system/control",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      if (!realtimeDb) return res.status(503).json({
-        success: false, message: "Realtime Database unavailable."
-      });
-      const u = { updatedAt: new Date().toISOString(), updatedBy: req.uid };
-      if (typeof req.body && typeof req.body.tradingFrozen === "boolean")
-        u.trading_frozen = req.body.tradingFrozen;
-      if (typeof req.body && typeof req.body.withdrawalsFrozen === "boolean")
-        u.withdrawals_frozen = req.body.withdrawalsFrozen;
-      if (typeof req.body && typeof req.body.maintenance === "boolean")
-        u.maintenance = req.body.maintenance;
-      if (req.body && req.body.announcement !== undefined)
-        u.announcement = String(req.body.announcement || "").slice(0, 1000);
-      await realtimeDb.ref("system_control").update(u);
-      await firestore.collection("admin_audit_logs").add({
-        adminUid: req.uid, action: "SYSTEM_CONTROL_UPDATE",
-        target: "system_control", details: u, createdAt: new Date()
-      });
-      return res.json({ success: true, controls: u });
-    } catch (e) {
-      return res.status(500).json({
-        success: false, code: "SYSTEM_CONTROL_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-// ----- audit -----
-app.get(
-  API_PREFIX + "/admin/audit",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      const snap = await firestore.collection("admin_audit_logs").limit(300).get();
-      const logs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      return res.json({ success: true, count: logs.length, logs });
-    } catch (e) {
-      return res.status(500).json({
-        success: false, code: "AUDIT_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-// ----- signals -----
-app.get(
-  API_PREFIX + "/admin/signals",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      const snap = await firestore.collection("signals").limit(200).get();
-      const signals = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      return res.json({ success: true, count: signals.length, signals });
-    } catch (e) {
-      return res.status(500).json({
-        success: false, code: "SIGNALS_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-// ----- reports -----
-app.get(
-  API_PREFIX + "/admin/reports",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      const [users, recharges, withdrawals, rewards] = await Promise.all([
-        firestore.collection("users").limit(300).get(),
-        firestore.collection("recharges").limit(300).get(),
-        firestore.collection("withdrawals").limit(300).get(),
-        firestore.collection("signal_redemptions").limit(300).get()
-      ]);
-      const u = users.docs.map(d => d.data());
-      const r = recharges.docs.map(d => d.data());
-      const w = withdrawals.docs.map(d => d.data());
-      const s = rewards.docs.map(d => d.data());
-      const num = x => Number.isFinite(Number(x)) ? Number(x) : 0;
-      return res.json({
-        success: true,
-        users: {
-          total: u.length,
-          frozen: u.filter(x => x.is_frozen === true).length
-        },
-        finance: {
-          rechargeCount: r.length,
-          approvedRechargeUgx: r.filter(x => String(x.status || "").toUpperCase() === "APPROVED")
-            .reduce((a,x) => a + num(x.amountUgx || x.amount_ugx), 0),
-          withdrawalCount: w.length,
-          paidWithdrawalUgx: w.filter(x =>
-            ["PAID","DISBURSED","COMPLETED"].includes(String(x.status || "").toUpperCase())
-          ).reduce((a,x) => a + num(x.netPayout || x.amountUgx || x.amount_ugx), 0),
-          rewards: s.reduce((a,x) => a + num(x.reward || x.profit || x.amount), 0)
-        },
-        generatedAt: new Date().toISOString()
-      });
-    } catch (e) {
-      return res.status(500).json({
-        success: false, code: "REPORTS_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-// ----- MT5 registry / command queue -----
-app.get(
-  API_PREFIX + "/admin/mt5/accounts",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      const snap = await firestore.collection("mt5_accounts").limit(200).get();
-      return res.json({
-        success: true,
-        count: snap.size,
-        accounts: snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      });
-    } catch (e) {
-      return res.status(500).json({
-        success: false, code: "MT5_ACCOUNTS_FAILED", message: e.message
-      });
-    }
-  }
-);
-
-app.post(
-  API_PREFIX + "/admin/mt5/accounts/:accountId/command",
-  requireSaintAdmin,
-  async (req, res) => {
-    try {
-      const accountId = String(req.params.accountId || "").trim();
-      const command = String(req.body && req.body.command || "").trim().toUpperCase();
-      if (!accountId || !["START_BOT","STOP_BOT","CLOSE_ALL","REFRESH"].includes(command))
-        return res.status(400).json({ success: false, message: "Invalid MT5 command." });
-      const ref = await firestore.collection("mt5_commands").add({
-        accountId, command, status: "PENDING", createdAt: new Date(), createdBy: req.uid
-      });
-      await firestore.collection("admin_audit_logs").add({
-        adminUid: req.uid, action: "MT5_COMMAND", target: accountId,
-        details: { command, commandId: ref.id }, createdAt: new Date()
-      });
-      return res.json({ success: true, commandId: ref.id });
-    } catch (e) {
-      return res.status(500).json({
-        success: false, code: "MT5_COMMAND_FAILED", message: e.message
-      });
-    }
-  }
-);
 
 const server =
   app.listen(

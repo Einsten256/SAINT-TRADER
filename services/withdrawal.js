@@ -23,6 +23,9 @@ const {
   getFirestore,
   FieldValue,
 } = require("firebase-admin/firestore");
+const {
+  getDatabase,
+} = require("firebase-admin/database");
 
 /*
  * Fund Password verification
@@ -67,6 +70,29 @@ try {
    CONFIGURATION
    ============================================================ */
 
+async function isWithdrawalFrozen() {
+  let db;
+
+  try {
+    db = getDatabase();
+  } catch (error) {
+    throw new Error(
+      "Withdrawal control service is unavailable."
+    );
+  }
+
+  try {
+    const snapshot = await db
+      .ref("system_control/withdrawals_frozen")
+      .once("value");
+
+    return snapshot.val() === true;
+  } catch (error) {
+    throw new Error(
+      "Withdrawal control service is unavailable."
+    );
+  }
+}
 const COLLECTION = "withdrawals";
 const USERS_COLLECTION = "users";
 
@@ -674,6 +700,15 @@ async function requestWithdrawal(
   requireFirestore();
 
   const uid = validateUserId(userId);
+  if (await isWithdrawalFrozen()) {
+    return {
+      success: false,
+      code: "WITHDRAWALS_FROZEN",
+      message:
+        "Withdrawals are temporarily frozen by SAINT ADMIN.",
+      httpStatus: 503,
+    };
+  }
 
   const rawAmount =
     amountUgx ?? amount;

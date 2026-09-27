@@ -18,6 +18,9 @@ const {
   getFirestore,
   FieldValue,
 } = require("firebase-admin/firestore");
+const {
+  getDatabase,
+} = require("firebase-admin/database");
 
 const ledger = require("./ledger");
 
@@ -32,6 +35,29 @@ try {
   );
 }
 
+async function isRechargeFrozen() {
+  let db;
+
+  try {
+    db = getDatabase();
+  } catch (error) {
+    throw new Error(
+      "Recharge control service is unavailable."
+    );
+  }
+
+  try {
+    const snapshot = await db
+      .ref("system_control/recharge_frozen")
+      .once("value");
+
+    return snapshot.val() === true;
+  } catch (error) {
+    throw new Error(
+      "Recharge control service is unavailable."
+    );
+  }
+}
 const DEFAULT_MIN_RECHARGE_UGX = 1000;
 const DEFAULT_MAX_RECHARGE_UGX = 100000000;
 
@@ -292,6 +318,11 @@ async function submitRecharge(
   requireFirestore();
 
   const uid = validateUserId(userId);
+  if (await isRechargeFrozen()) {
+    throw new Error(
+      "Recharge service is temporarily frozen by SAINT ADMIN."
+    );
+  }
 
   const finalAmount = normalizeAmount(
     amountUgx ?? amount

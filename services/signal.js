@@ -69,11 +69,7 @@ const SIGNAL_PROCESSING_MINUTES = Math.max(
   )
 );
 
-// New architecture uses a long-lived daily code.
-// IMPORTANT: do not read the old SIGNAL_EXPIRY_MINUTES env var,
-// because the previous system used a 20-minute USDT signal expiry.
-// Optional new variable: SIGNAL_CODE_EXPIRY_MINUTES.
-const SIGNAL_EXPIRY_MINUTES = 20;
+// Signal codes are redeemable for 20 minutes after creation.\n// The 20-minute expiry is the canonical Saint Crypto signal rule.\nconst SIGNAL_EXPIRY_MINUTES = 20;
 
 const SIGNAL_TIMEZONE =
   String(
