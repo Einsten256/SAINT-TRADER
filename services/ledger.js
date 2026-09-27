@@ -2548,7 +2548,183 @@ async function adjustPayoutBalance({
     ledgerTransactionId: ledgerId,
   };
 }
+async function adjustLockedTradingCapital({
+  userId,
+  amountUgx,
+  direction,
+  adminId = null,
+  reason,
+  adjustmentId = null,
+}) {
+  requireFirestore();
+
+  const uid = validateUserId(
+    userId
+  );
+
+  const amount = requirePositiveAmount(
+    amountUgx,
+    "Invalid adjustment amount."
+  );
+
+  const finalDirection = String(
+    direction || ""
+  )
+    .trim()
+    .toUpperCase();
+
+  if (
+    finalDirection !== "CREDIT" &&
+    finalDirection !== "DEBIT"
+  ) {
+    throw new Error(
+      "Adjustment direction must be CREDIT or DEBIT."
+    );
+  }
+
+  const finalReason = String(
+    reason || ""
+  ).trim();
+
+  if (!finalReason) {
+    throw new Error(
+      "A reason is required."
+    );
+  }
+
+  const ledgerId =
+    adjustmentId
+      ? `admin_locked_capital_${adjustmentId}`
+      : firestore
+          .collection(COLLECTIONS.LEDGER)
+          .doc().id;
+
+  const userRef = firestore
+    .collection(COLLECTIONS.USERS)
+    .doc(uid);
+
+  const ledgerRef = firestore
+    .collection(COLLECTIONS.LEDGER)
+    .doc(ledgerId);
+
+  let previousBalance = 0;
+  let newBalance = 0;
+
+  await firestore.runTransaction(
+    async (transaction) => {
+      const ledgerDoc =
+        await transaction.get(
+          ledgerRef
+        );
+
+      if (ledgerDoc.exists) {
+        throw new Error(
+          "This adjustment has already been applied."
+        );
+      }
+
+      const userDoc =
+        await transaction.get(
+          userRef
+        );
+
+      if (!userDoc.exists) {
+        throw new Error(
+          "User account could not be found."
+        );
+      }
+
+      const user =
+        userDoc.data() || {};
+
+      previousBalance =
+        Math.max(
+          0,
+          money(
+            user.locked_trading_capital_ugx
+          )
+        );
+
+      if (
+        finalDirection === "DEBIT" &&
+        previousBalance < amount
+      ) {
+        throw new Error(
+          `Insufficient locked trading capital. Available: UGX ${previousBalance.toLocaleString()}.`
+        );
+      }
+
+      newBalance =
+        finalDirection === "CREDIT"
+          ? previousBalance + amount
+          : previousBalance - amount;
+
+      transaction.set(
+        userRef,
+        {
+          locked_trading_capital_ugx:
+            newBalance,
+          updatedAt:
+            FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      transaction.set(
+        ledgerRef,
+        {
+          transactionId:
+            ledgerId,
+          ledgerTransactionId:
+            ledgerId,
+          userId: uid,
+          type:
+            finalDirection === "CREDIT"
+              ? "ADMIN_LOCKED_CAPITAL_CREDIT"
+              : "ADMIN_LOCKED_CAPITAL_DEBIT",
+          direction:
+            finalDirection,
+          amount,
+          amountUgx: amount,
+          currency: CURRENCY,
+          source: "SAINT_ADMIN",
+          referenceId:
+            adminId || null,
+          metadata: {
+            adminId:
+              adminId || null,
+            reason: finalReason,
+            previousLockedTradingCapitalUgx:
+              previousBalance,
+            newLockedTradingCapitalUgx:
+              newBalance,
+          },
+          createdAt:
+            FieldValue.serverTimestamp(),
+        },
+        { merge: false }
+      );
+    }
+  );
+
+  return {
+    success: true,
+    userId: uid,
+    direction: finalDirection,
+    amountUgx: amount,
+    previousLockedTradingCapitalUgx:
+      previousBalance,
+    newLockedTradingCapitalUgx:
+      newBalance,
+    reason: finalReason,
+    adminId:
+      adminId || null,
+    ledgerTransactionId:
+      ledgerId,
+  };
+}
 module.exports = {
+  adjustLockedTradingCapital,
   adjustPayoutBalance,
 
   getBalance,

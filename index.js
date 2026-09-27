@@ -128,6 +128,38 @@ const SERVICE_ACCOUNT_PATH =
   );
 
 // ============================================================
+function saintAdminSerialize(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  if (typeof value.toDate === "function") {
+    return value.toDate().toISOString();
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(saintAdminSerialize);
+  }
+
+  if (typeof value === "object") {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) {
+      out[key] = saintAdminSerialize(item);
+    }
+    return out;
+  }
+
+  return value;
+}
+
+function saintAdminNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
 // 5. FIREBASE STATE
 // ============================================================
 
@@ -948,10 +980,13 @@ if (rateLimit) {
 
   app.use(
     rateLimit({
+      skip: (req) => String(req.path || "").startsWith(`${API_PREFIX}/mt5/monitor/`),
+
       windowMs:
         15 * 60 * 1000,
 
-      max: 300,
+      max:
+        300,
 
       standardHeaders:
         true,
@@ -4883,6 +4918,408 @@ app.use(
 // ============================================================
 
 
+/* ============================================================
+   MT5 MONITOR BRIDGE
+   - heartbeat: MT5 -> Firestore mt5_accounts
+   - commands: SAINT ADMIN -> Firestore mt5_commands -> MT5
+   - acknowledgement: MT5 -> Firestore mt5_commands
+   - auth header: x-saint-mt5-key
+   - env secret: SAINT_MT5_MONITOR_KEY
+   ============================================================ */
+
+app.post(
+  `${API_PREFIX}/mt5/monitor/heartbeat`,
+  async (req, res) => {
+    try {
+      const configuredKey = String(
+        process.env.SAINT_MT5_MONITOR_KEY || ""
+      ).trim();
+
+      const suppliedKey = String(
+        req.headers["x-saint-mt5-key"] || ""
+      ).trim();
+
+      if (!configuredKey || suppliedKey !== configuredKey) {
+        return res.status(401).json({
+          success: false,
+          code: "MT5_MONITOR_UNAUTHORIZED",
+          message: "MT5 monitor authorization failed.",
+        });
+      }
+
+      const accountId = String(
+        req.body?.accountId ||
+        req.body?.login ||
+        ""
+      ).trim();
+
+      if (!accountId) {
+        return res.status(400).json({
+          success: false,
+          code: "MT5_ACCOUNT_ID_REQUIRED",
+          message: "MT5 accountId/login is required.",
+        });
+      }
+
+      const payload = {
+        accountId,
+        login: String(
+          req.body?.login || accountId
+        ),
+        broker: String(
+          req.body?.broker || ""
+        ),
+        server: String(
+          req.body?.server || ""
+        ),
+        terminal: String(
+          req.body?.terminal || ""
+        ),
+        balance: saintAdminNumber(
+          req.body?.balance
+        ),
+        equity: saintAdminNumber(
+          req.body?.equity
+        ),
+        freeMargin: saintAdminNumber(
+          req.body?.freeMargin ??
+          req.body?.free_margin
+        ),
+        margin: saintAdminNumber(
+          req.body?.margin
+        ),
+        marginLevel: saintAdminNumber(
+          req.body?.marginLevel ??
+          req.body?.margin_level
+        ),
+        floatingPnl: saintAdminNumber(
+          req.body?.floatingPnl ??
+          req.body?.floating_pnl
+        ),
+        positions: Array.isArray(
+          req.body?.positions
+        )
+          ? req.body.positions
+          : [],
+        botStatus: String(
+          req.body?.botStatus || "UNKNOWN"
+        ),
+        lastHeartbeatAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      await firestore
+        .collection("mt5_accounts")
+        .doc(accountId)
+        .set(
+          payload,
+          { merge: true }
+        );
+
+      return res.json({
+        success: true,
+        message: "MT5 heartbeat accepted.",
+        accountId,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        code: "MT5_HEARTBEAT_FAILED",
+        message: error.message,
+      });
+    }
+  }
+);
+
+app.get(
+  `${API_PREFIX}/mt5/monitor/commands`,
+  async (req, res) => {
+    try {
+      const configuredKey = String(
+        process.env.SAINT_MT5_MONITOR_KEY || ""
+      ).trim();
+
+      const suppliedKey = String(
+        req.headers["x-saint-mt5-key"] || ""
+      ).trim();
+
+      if (!configuredKey || suppliedKey !== configuredKey) {
+        return res.status(401).json({
+          success: false,
+          code: "MT5_MONITOR_UNAUTHORIZED",
+        });
+      }
+
+      const accountId = String(
+        req.query.accountId || ""
+      ).trim();
+
+      const snapshot = await firestore
+        .collection("mt5_commands")
+        .where(
+          "status",
+          "==",
+          "PENDING"
+        )
+        .limit(50)
+        .get();
+
+      const commands = snapshot.docs
+        .map((doc) => ({
+          id: doc.id,
+          ...saintAdminSerialize(
+            doc.data() || {}
+          ),
+        }))
+        .filter(
+          (item) =>
+            !accountId ||
+            String(
+              item.accountId || ""
+            ) === accountId
+        );
+
+      return res.json({
+        success: true,
+        commands,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        code: "MT5_COMMANDS_FAILED",
+        message: error.message,
+      });
+    }
+  }
+);
+
+app.post(
+  `${API_PREFIX}/mt5/monitor/commands/:commandId/ack`,
+  async (req, res) => {
+    try {
+      const configuredKey = String(
+        process.env.SAINT_MT5_MONITOR_KEY || ""
+      ).trim();
+
+      const suppliedKey = String(
+        req.headers["x-saint-mt5-key"] || ""
+      ).trim();
+
+      if (!configuredKey || suppliedKey !== configuredKey) {
+        return res.status(401).json({
+          success: false,
+          code: "MT5_MONITOR_UNAUTHORIZED",
+        });
+      }
+
+      const commandId = String(
+        req.params.commandId || ""
+      ).trim();
+
+      if (!commandId) {
+        return res.status(400).json({
+          success: false,
+          code: "MT5_COMMAND_ID_REQUIRED",
+          message: "Command ID is required.",
+        });
+      }
+
+      const status = String(
+        req.body?.status ||
+        "COMPLETED"
+      )
+        .trim()
+        .toUpperCase();
+
+      await firestore
+        .collection("mt5_commands")
+        .doc(commandId)
+        .set(
+          {
+            status,
+            result: saintAdminSerialize(
+              req.body?.result || null
+            ),
+            acknowledgedAt: new Date(),
+          },
+          { merge: true }
+        );
+
+      return res.json({
+        success: true,
+        message: "MT5 command acknowledged.",
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        code: "MT5_COMMAND_ACK_FAILED",
+        message: error.message,
+      });
+    }
+  }
+);
+/* ============================================================
+   ADMIN LOCKED TRADING CAPITAL ADJUSTMENT
+   Separate from payout-balance adjustment.
+   ============================================================ */
+
+app.post(
+  `${API_PREFIX}/admin/finance/adjust-capital`,
+  requireSaintAdmin,
+  async (req, res) => {
+    try {
+      const userId = String(
+        req.body?.userId ||
+        req.body?.uid ||
+        ""
+      ).trim();
+
+      const amountUgx = Number(
+        req.body?.amountUgx ??
+        req.body?.amount ??
+        0
+      );
+
+      const action = String(
+        req.body?.action ||
+        "CREDIT"
+      )
+        .trim()
+        .toUpperCase();
+
+      const reason = String(
+        req.body?.reason ||
+        ""
+      )
+        .trim()
+        .slice(0, 500);
+
+      if (!userId) {
+        return res.status(400).json({
+          success: false,
+          code: "USER_ID_REQUIRED",
+          message: "User ID is required.",
+        });
+      }
+
+      const roundedAmount =
+        Math.round(
+          amountUgx
+        );
+
+      if (
+        !Number.isSafeInteger(
+          roundedAmount
+        ) ||
+        roundedAmount <= 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "INVALID_AMOUNT",
+          message:
+            "Enter a valid positive UGX amount.",
+        });
+      }
+
+      if (
+        action !== "CREDIT" &&
+        action !== "DEDUCT"
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "INVALID_ACTION",
+          message:
+            "Action must be CREDIT or DEDUCT.",
+        });
+      }
+
+      if (!reason) {
+        return res.status(400).json({
+          success: false,
+          code: "REASON_REQUIRED",
+          message:
+            "A reason is required.",
+        });
+      }
+
+      if (
+        !ledger ||
+        typeof ledger.adjustLockedTradingCapital !==
+          "function"
+      ) {
+        return res.status(503).json({
+          success: false,
+          code:
+            "LOCKED_CAPITAL_ADJUSTMENT_UNAVAILABLE",
+          message:
+            "Locked-capital adjustment service is unavailable.",
+        });
+      }
+
+      const adjustmentId =
+        String(
+          req.body?.adjustmentId ||
+          ""
+        ).trim() || null;
+
+      const result =
+        await ledger.adjustLockedTradingCapital({
+          userId,
+          amountUgx:
+            roundedAmount,
+          direction:
+            action === "CREDIT"
+              ? "CREDIT"
+              : "DEBIT",
+          adminId:
+            req.uid,
+          reason,
+          adjustmentId,
+        });
+
+      if (firestore) {
+        await firestore
+          .collection(
+            "admin_audit_logs"
+          )
+          .add({
+            adminUid:
+              req.uid,
+            action:
+              action === "CREDIT"
+                ? "LOCKED_CAPITAL_CREDITED"
+                : "LOCKED_CAPITAL_DEDUCTED",
+            target:
+              userId,
+            details: {
+              reason,
+              result,
+            },
+            createdAt:
+              new Date(),
+          });
+      }
+
+      return res.json({
+        success: true,
+        message:
+          action === "CREDIT"
+            ? "Locked trading capital credited."
+            : "Locked trading capital deducted.",
+        adjustment:
+          result,
+      });
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        code:
+          "LOCKED_CAPITAL_ADJUSTMENT_FAILED",
+        message:
+          error.message,
+      });
+    }
+  }
+);
 const server =
   app.listen(
     PORT,
