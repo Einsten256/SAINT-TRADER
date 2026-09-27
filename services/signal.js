@@ -73,14 +73,7 @@ const SIGNAL_PROCESSING_MINUTES = Math.max(
 // IMPORTANT: do not read the old SIGNAL_EXPIRY_MINUTES env var,
 // because the previous system used a 20-minute USDT signal expiry.
 // Optional new variable: SIGNAL_CODE_EXPIRY_MINUTES.
-const SIGNAL_EXPIRY_MINUTES = Math.max(
-  SIGNAL_PROCESSING_MINUTES + 1,
-  Math.round(
-    Number(
-      process.env.SIGNAL_CODE_EXPIRY_MINUTES ?? 1440
-    ) || 1440
-  )
-);
+const SIGNAL_EXPIRY_MINUTES = 20;
 
 const SIGNAL_TIMEZONE =
   String(

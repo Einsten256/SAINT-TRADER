@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // SAINT CRYPTO TRADE ENGINE
 // index.js
 // ============================================================
@@ -2121,7 +2121,8 @@ app.post(
       }
 
       const sessionLabel =
-        String(
+        Strin
+      g(
           req.body?.session ||
             req.body?.sessionLabel ||
             "MANUAL TEST"
@@ -2259,7 +2260,147 @@ async function requireSaintAdmin(req, res, next) {
       message: "SAINT ADMIN authentication failed."
     });
   }
-}
+}// ============================================================
+// SAINT ADMIN — USERS
+// ============================================================
+
+app.get(
+  `${API_PREFIX}/admin/users`,
+  requireSaintAdmin,
+  verifyFirestore,
+  async (req, res) => {
+    try {
+      const snapshot =
+        await firestore
+          .collection("users")
+          .get();
+
+      const users = [];
+
+      snapshot.forEach((doc) => {
+        const data = doc.data() || {};
+
+        const email =
+          data.email ||
+          data.user_email ||
+          "No Email";
+
+        const phone =
+          data.phone_number ||
+          data.phone ||
+          "No Phone";
+
+        const balance =
+          Number(
+            data.usdt_balance ??
+            data.balance ??
+            0
+          ) || 0;
+
+        const locked =
+          Number(
+            data.locked_principal ??
+            0
+          ) || 0;
+
+        const status =
+          String(
+            data.status || ""
+          ).toUpperCase();
+
+        const isFrozen =
+          Boolean(data.is_frozen) ||
+          [
+            "FROZEN",
+            "PAUSED",
+            "SUSPENDED",
+          ].includes(status);
+
+        const serialized = {
+          id: doc.id,
+          ...data,
+          email,
+          phone,
+          balance,
+          locked,
+          is_frozen: isFrozen,
+        };
+
+        Object.keys(serialized).forEach((key) => {
+          const value = serialized[key];
+
+          if (
+            value &&
+            typeof value.toDate === "function"
+          ) {
+            serialized[key] =
+              value.toDate().toISOString();
+          } else if (
+            value &&
+            typeof value.toISOString === "function"
+          ) {
+            serialized[key] =
+              value.toISOString();
+          }
+        });
+
+        users.push(serialized);
+      });
+
+      const depositedUsers =
+        users.filter(
+          (user) =>
+            Number(user.balance) > 0 ||
+            Number(user.locked) > 0
+        ).length;
+
+      return res.status(200).json({
+        success: true,
+
+        users,
+
+        stats: {
+          total_joined: users.length,
+          deposited_users: depositedUsers,
+        },
+
+        timestamp:
+          new Date().toISOString(),
+      });
+
+    } catch (error) {
+
+      console.error(
+        "❌ SAINT ADMIN users load failed:",
+        error.stack || error.message
+      );
+
+      return res.status(500).json({
+        success: false,
+
+        code:
+          "ADMIN_USERS_FETCH_FAILED",
+
+        message:
+          NODE_ENV === "production"
+            ? "Unable to load Saint Crypto users."
+            : error.message ||
+              "Unable to load Saint Crypto users.",
+
+        users: [],
+
+        stats: {
+          total_joined: 0,
+          deposited_users: 0,
+        },
+      });
+    }
+  }
+);
+
+// ============================================================
+// END SAINT ADMIN — USERS
+// ============================================================
 // ------------------------------------------------------------
 // GENERATE DAILY SIGNAL MANUALLY
 // ------------------------------------------------------------
