@@ -69,7 +69,9 @@ const SIGNAL_PROCESSING_MINUTES = Math.max(
   )
 );
 
-// Signal codes are redeemable for 20 minutes after creation.\n// The 20-minute expiry is the canonical Saint Crypto signal rule.\nconst SIGNAL_EXPIRY_MINUTES = 20;
+// Signal codes are redeemable for 20 minutes after creation.
+// The 20-minute expiry is the canonical Saint Crypto signal rule.
+const SIGNAL_EXPIRY_MINUTES = 20;
 
 const SIGNAL_TIMEZONE =
   String(
