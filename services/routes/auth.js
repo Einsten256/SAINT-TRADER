@@ -26,12 +26,7 @@
 const express = require("express");
 
 function createRouter(routeDeps = {}) {
-  const {
-    verifyAuth,
-    verifyFirestore,
-    strictLimiter,
-    services = {},
-  } = routeDeps;
+  const { firestore, verifyAuth, verifyFirestore, strictLimiter, services = {} } = routeDeps;
 
   const router = express.Router();
   const kendrick = services.kendrick;
@@ -57,12 +52,9 @@ function createRouter(routeDeps = {}) {
     verifyFirestore,
     async (req, res) => {
       try {
-        const firestore =
-          typeof kendrick.getFirestore === "function"
-            ? kendrick.getFirestore()
-            : null;
+        const db = firestore;
 
-        if (!firestore) {
+        if (!db) {
           return res.status(500).json({
             success: false,
             message: "Firestore service is unavailable.",
@@ -83,7 +75,7 @@ function createRouter(routeDeps = {}) {
         }
 
         const ref =
-          firestore.collection("users").doc(uid);
+          db.collection("users").doc(uid);
 
         const snapshot =
           await ref.get();
@@ -183,12 +175,9 @@ function createRouter(routeDeps = {}) {
     verifyFirestore,
     async (req, res) => {
       try {
-        const firestore =
-          typeof kendrick.getFirestore === "function"
-            ? kendrick.getFirestore()
-            : null;
+        const db = firestore;
 
-        if (!firestore) {
+        if (!db) {
           return res.status(500).json({
             success: false,
             message: "Firestore service is unavailable.",
@@ -219,7 +208,7 @@ function createRouter(routeDeps = {}) {
         }
 
         await kendrick.saveFundPassword(
-          firestore.collection("users").doc(uid),
+          db.collection("users").doc(uid),
           newPassword
         );
 
@@ -269,12 +258,9 @@ function createRouter(routeDeps = {}) {
     verifyFirestore,
     async (req, res) => {
       try {
-        const firestore =
-          typeof kendrick.getFirestore === "function"
-            ? kendrick.getFirestore()
-            : null;
+        const db = firestore;
 
-        if (!firestore) {
+        if (!db) {
           return res.status(500).json({
             success: false,
             message: "Firestore service is unavailable.",
@@ -295,7 +281,7 @@ function createRouter(routeDeps = {}) {
         }
 
         const ref =
-          firestore.collection("users").doc(uid);
+          db.collection("users").doc(uid);
 
         const snapshot =
           await ref.get();
@@ -395,12 +381,9 @@ function createRouter(routeDeps = {}) {
     verifyFirestore,
     async (req, res) => {
       try {
-        const firestore =
-          typeof kendrick.getFirestore === "function"
-            ? kendrick.getFirestore()
-            : null;
+        const db = firestore;
 
-        if (!firestore) {
+        if (!db) {
           return res.status(500).json({
             success: false,
             message: "Firestore service is unavailable.",
@@ -431,7 +414,7 @@ function createRouter(routeDeps = {}) {
         }
 
         await kendrick.saveFundPassword(
-          firestore.collection("users").doc(uid),
+          db.collection("users").doc(uid),
           newPassword
         );
 
@@ -472,12 +455,9 @@ function createRouter(routeDeps = {}) {
     verifyFirestore,
     async (req, res) => {
       try {
-        const firestore =
-          typeof kendrick.getFirestore === "function"
-            ? kendrick.getFirestore()
-            : null;
+        const db = firestore;
 
-        if (!firestore) {
+        if (!db) {
           return res.status(500).json({
             success: false,
             message: "Firestore service is unavailable.",
@@ -498,7 +478,7 @@ function createRouter(routeDeps = {}) {
         }
 
         await kendrick.saveFundPassword(
-          firestore.collection("users").doc(uid),
+          db.collection("users").doc(uid),
           req.body?.newPassword
         );
 
@@ -525,12 +505,9 @@ function createRouter(routeDeps = {}) {
     verifyFirestore,
     async (req, res) => {
       try {
-        const firestore =
-          typeof kendrick.getFirestore === "function"
-            ? kendrick.getFirestore()
-            : null;
+        const db = firestore;
 
-        if (!firestore) {
+        if (!db) {
           return res.status(500).json({
             success: false,
             message: "Firestore service is unavailable.",
@@ -551,7 +528,7 @@ function createRouter(routeDeps = {}) {
         }
 
         const ref =
-          firestore.collection("users").doc(uid);
+          db.collection("users").doc(uid);
 
         const doc = await ref.get();
 
@@ -633,12 +610,9 @@ function createRouter(routeDeps = {}) {
     verifyFirestore,
     async (req, res) => {
       try {
-        const firestore =
-          typeof kendrick.getFirestore === "function"
-            ? kendrick.getFirestore()
-            : null;
+        const db = firestore;
 
-        if (!firestore) {
+        if (!db) {
           return res.status(500).json({
             success: false,
             message: "Firestore service is unavailable.",
@@ -659,7 +633,7 @@ function createRouter(routeDeps = {}) {
         }
 
         const ref =
-          firestore.collection("users").doc(uid);
+          db.collection("users").doc(uid);
 
         const snapshot =
           await ref.get();
@@ -759,12 +733,9 @@ function createRouter(routeDeps = {}) {
     verifyFirestore,
     async (req, res) => {
       try {
-        const firestore =
-          typeof kendrick.getFirestore === "function"
-            ? kendrick.getFirestore()
-            : null;
+        const db = firestore;
 
-        if (!firestore) {
+        if (!db) {
           return res.status(500).json({
             success: false,
             message: "Firestore service is unavailable.",
@@ -795,7 +766,7 @@ function createRouter(routeDeps = {}) {
         }
 
         await kendrick.saveFundPassword(
-          firestore.collection("users").doc(uid),
+          db.collection("users").doc(uid),
           newPassword
         );
 
@@ -824,4 +795,5 @@ function createRouter(routeDeps = {}) {
 module.exports = {
   createRouter,
 };
+
 
