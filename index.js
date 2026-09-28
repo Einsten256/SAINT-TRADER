@@ -5085,6 +5085,11 @@ app.post(
         terminal: String(
           req.body?.terminal || ""
         ),
+        currency: String(
+          req.body?.currency ||
+          req.body?.accountCurrency ||
+          ""
+        ).trim().toUpperCase(),
         balance: saintAdminNumber(
           req.body?.balance
         ),
