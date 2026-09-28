@@ -4771,6 +4771,116 @@ app.post(
   }
 );
 
+/* ============================================================
+   MT5 LIVE MONITOR ROUTES
+   ============================================================ */
+app.post(`${API_PREFIX}/mt5/monitor/heartbeat`, async (req, res) => {
+  try {
+    const configuredKey = String(process.env.SAINT_MT5_MONITOR_KEY || '').trim();
+    const suppliedKey = String(req.headers['x-saint-mt5-key'] || '').trim();
+
+    if (!configuredKey || suppliedKey !== configuredKey) {
+      return res.status(401).json({
+        success: false,
+        code: 'MT5_MONITOR_UNAUTHORIZED',
+        message: 'MT5 monitor authorization failed.',
+      });
+    }
+
+    const accountId = String(req.body?.accountId || req.body?.login || '').trim();
+    if (!accountId) {
+      return res.status(400).json({
+        success: false,
+        code: 'MT5_ACCOUNT_ID_REQUIRED',
+        message: 'MT5 accountId/login is required.',
+      });
+    }
+
+    const payload = {
+      accountId,
+      login: String(req.body?.login || accountId),
+      broker: String(req.body?.broker || ''),
+      server: String(req.body?.server || ''),
+      terminal: String(req.body?.terminal || ''),
+      balance: Number(req.body?.balance || 0),
+      equity: Number(req.body?.equity || 0),
+      freeMargin: Number(req.body?.freeMargin ?? req.body?.free_margin ?? 0),
+      margin: Number(req.body?.margin || 0),
+      marginLevel: Number(req.body?.marginLevel ?? req.body?.margin_level ?? 0),
+      floatingPnl: Number(req.body?.floatingPnl ?? req.body?.floating_pnl ?? 0),
+      positions: Array.isArray(req.body?.positions) ? req.body.positions : [],
+      botStatus: String(req.body?.botStatus || 'UNKNOWN'),
+      lastHeartbeatAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    await firestore.collection('mt5_accounts').doc(accountId).set(payload, { merge: true });
+
+    return res.json({ success: true, message: 'MT5 heartbeat accepted.', accountId });
+  } catch (error) {
+    return res.status(500).json({ success: false, code: 'MT5_HEARTBEAT_FAILED', message: error.message });
+  }
+});
+
+app.get(`${API_PREFIX}/mt5/monitor/commands`, async (req, res) => {
+  try {
+    const configuredKey = String(process.env.SAINT_MT5_MONITOR_KEY || '').trim();
+    const suppliedKey = String(req.headers['x-saint-mt5-key'] || '').trim();
+
+    if (!configuredKey || suppliedKey !== configuredKey) {
+      return res.status(401).json({ success: false, code: 'MT5_MONITOR_UNAUTHORIZED' });
+    }
+
+    const accountId = String(req.query.accountId || '').trim();
+    const snapshot = await firestore.collection('mt5_commands').where('status', '==', 'PENDING').limit(50).get();
+
+    const serialize = (value) => {
+      if (value === null || value === undefined) return value;
+      if (typeof value.toDate === 'function') return value.toDate().toISOString();
+      if (value instanceof Date) return value.toISOString();
+      if (Array.isArray(value)) return value.map(serialize);
+      if (typeof value === 'object') {
+        const out = {};
+        for (const [key, item] of Object.entries(value)) out[key] = serialize(item);
+        return out;
+      }
+      return value;
+    };
+
+    const commands = snapshot.docs.map(doc => ({ id: doc.id, ...serialize(doc.data() || {}) })).filter(item => !accountId || String(item.accountId || '') === accountId);
+
+    return res.json({ success: true, commands });
+  } catch (error) {
+    return res.status(500).json({ success: false, code: 'MT5_COMMANDS_FAILED', message: error.message });
+  }
+});
+
+app.post(`${API_PREFIX}/mt5/monitor/commands/:commandId/ack`, async (req, res) => {
+  try {
+    const configuredKey = String(process.env.SAINT_MT5_MONITOR_KEY || '').trim();
+    const suppliedKey = String(req.headers['x-saint-mt5-key'] || '').trim();
+
+    if (!configuredKey || suppliedKey !== configuredKey) {
+      return res.status(401).json({ success: false, code: 'MT5_MONITOR_UNAUTHORIZED' });
+    }
+
+    const commandId = String(req.params.commandId || '').trim();
+    if (!commandId) {
+      return res.status(400).json({ success: false, code: 'MT5_COMMAND_ID_REQUIRED' });
+    }
+
+    await firestore.collection('mt5_commands').doc(commandId).set({
+      status: String(req.body?.status || 'COMPLETED').trim().toUpperCase(),
+      result: req.body?.result || null,
+      acknowledgedAt: new Date(),
+    }, { merge: true });
+
+    return res.json({ success: true, message: 'MT5 command acknowledged.' });
+  } catch (error) {
+    return res.status(500).json({ success: false, code: 'MT5_COMMAND_ACK_FAILED', message: error.message });
+  }
+});
+
 // 43. 404 HANDLER
 // ============================================================
 
