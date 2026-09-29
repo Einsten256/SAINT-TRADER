@@ -3888,7 +3888,16 @@ function registerHandlers() {
 
 
 
+let telegramWithdrawalRecoveryBackoffUntil = 0;
+
 async function resendPendingWithdrawalsOnStartup() {
+  if (Date.now() < telegramWithdrawalRecoveryBackoffUntil) {
+    console.warn(
+      "[telegram withdrawal] Startup recovery skipped: Firestore quota backoff active."
+    );
+    return;
+  }
+
   try {
     const { getFirestore } = require("firebase-admin/firestore");
     const db = getFirestore();
@@ -3896,6 +3905,8 @@ async function resendPendingWithdrawalsOnStartup() {
     const snap = await db.collection("withdrawals")
       .where("status", "==", "UNDER_REVIEW")
       .get();
+
+    telegramWithdrawalRecoveryBackoffUntil = 0;
 
     console.log("[telegram withdrawal] Pending on startup:", snap.size);
 
@@ -3920,9 +3931,25 @@ async function resendPendingWithdrawalsOnStartup() {
       }
     }
   } catch (error) {
+    const message = String(error?.message || error);
+
+    if (
+      message.includes("RESOURCE_EXHAUSTED") ||
+      message.includes("Quota exceeded")
+    ) {
+      telegramWithdrawalRecoveryBackoffUntil =
+        Date.now() + 5 * 60 * 1000;
+
+      console.warn(
+        "[telegram withdrawal] Firestore quota exceeded. Startup recovery backing off for 5 minutes."
+      );
+
+      return;
+    }
+
     console.error(
       "[telegram withdrawal] Startup recovery failed:",
-      error?.message || error
+      message
     );
   }
 }
