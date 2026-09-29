@@ -4054,6 +4054,174 @@ app.post(
   }
 );
 
+
+  // ===== ADMIN FINANCIAL CONTROL V1 =====
+  // Read-only customer financial snapshot.
+  //
+  // This endpoint NEVER changes customer money.
+  // It reads the current user balances and the canonical ledger.
+  //
+  // Canonical ledger types used:
+  // RECHARGE_CREDIT
+  // SIGNAL_PAYOUT
+  // ADMIN_LOCKED_CAPITAL_CREDIT
+  // ADMIN_LOCKED_CAPITAL_DEBIT
+  // ADMIN_PAYOUT_CREDIT
+  // ADMIN_PAYOUT_DEBIT
+
+  app.get(
+    API_PREFIX + "/admin/users/:userId/financial",
+    requireSaintAdmin,
+    verifyFirestore,
+    async (req, res) => {
+      try {
+        const userId = String(req.params.userId || "").trim();
+
+        if (!userId) {
+          return res.status(400).json({
+            success: false,
+            code: "USER_ID_REQUIRED",
+            message: "User ID is required."
+          });
+        }
+
+        const userRef = firestore.collection("users").doc(userId);
+        const userSnap = await userRef.get();
+
+        if (!userSnap.exists) {
+          return res.status(404).json({
+            success: false,
+            code: "USER_NOT_FOUND",
+            message: "Customer account was not found."
+          });
+        }
+
+        const user = userSnap.data() || {};
+
+        const lockedTradingCapitalUgx = Math.max(
+          0,
+          Number(user.locked_trading_capital_ugx) || 0
+        );
+
+        const payoutBalanceUgx = Math.max(
+          0,
+          Number(user.payout_balance_ugx) || 0
+        );
+
+        // Query only the canonical ledger for this customer.
+        // Cache the read briefly to reduce repeated Firestore reads
+        // when the Admin Control Room refreshes the same customer.
+        const ledgerSnap = await saintAdminCachedRead(
+          `admin:user-financial-ledger:${userId}`,
+          () =>
+            firestore
+              .collection("ledger_transactions")
+              .where("userId", "==", userId)
+              .get(),
+          10000
+        );
+
+        const totals = {
+          totalRechargeCreditUgx: 0,
+          totalSignalPayoutUgx: 0,
+          totalAdminCapitalCreditUgx: 0,
+          totalAdminCapitalDebitUgx: 0,
+          totalAdminPayoutCreditUgx: 0,
+          totalAdminPayoutDebitUgx: 0
+        };
+
+        const typeCounts = {
+          RECHARGE_CREDIT: 0,
+          SIGNAL_PAYOUT: 0,
+          ADMIN_LOCKED_CAPITAL_CREDIT: 0,
+          ADMIN_LOCKED_CAPITAL_DEBIT: 0,
+          ADMIN_PAYOUT_CREDIT: 0,
+          ADMIN_PAYOUT_DEBIT: 0
+        };
+
+        for (const doc of ledgerSnap.docs) {
+          const entry = doc.data() || {};
+          const amount = Math.max(
+            0,
+            Number(entry.amountUgx ?? entry.amount) || 0
+          );
+
+          switch (String(entry.type || "").trim()) {
+            case "RECHARGE_CREDIT":
+              totals.totalRechargeCreditUgx += amount;
+              typeCounts.RECHARGE_CREDIT += 1;
+              break;
+
+            case "SIGNAL_PAYOUT":
+              totals.totalSignalPayoutUgx += amount;
+              typeCounts.SIGNAL_PAYOUT += 1;
+              break;
+
+            case "ADMIN_LOCKED_CAPITAL_CREDIT":
+              totals.totalAdminCapitalCreditUgx += amount;
+              typeCounts.ADMIN_LOCKED_CAPITAL_CREDIT += 1;
+              break;
+
+            case "ADMIN_LOCKED_CAPITAL_DEBIT":
+              totals.totalAdminCapitalDebitUgx += amount;
+              typeCounts.ADMIN_LOCKED_CAPITAL_DEBIT += 1;
+              break;
+
+            case "ADMIN_PAYOUT_CREDIT":
+              totals.totalAdminPayoutCreditUgx += amount;
+              typeCounts.ADMIN_PAYOUT_CREDIT += 1;
+              break;
+
+            case "ADMIN_PAYOUT_DEBIT":
+              totals.totalAdminPayoutDebitUgx += amount;
+              typeCounts.ADMIN_PAYOUT_DEBIT += 1;
+              break;
+
+            default:
+              break;
+          }
+        }
+
+        return res.json({
+          success: true,
+          currency: "UGX",
+
+          user: {
+            id: userSnap.id,
+            uid: user.uid || userSnap.id,
+            name: user.name || user.displayName || null,
+            email: user.email || null,
+            phone: user.phone || user.phoneNumber || null
+          },
+
+          balances: {
+            lockedTradingCapitalUgx,
+            payoutBalanceUgx,
+            withdrawableBalanceUgx: payoutBalanceUgx
+          },
+
+          ledgerTotals: totals,
+
+          ledgerSummary: {
+            totalEntries: ledgerSnap.size,
+            typeCounts
+          }
+        });
+      } catch (error) {
+        console.error(
+          "[ADMIN FINANCIAL CONTROL] Failed:",
+          error?.stack || error
+        );
+
+        return res.status(500).json({
+          success: false,
+          code: "ADMIN_FINANCIAL_CONTROL_FAILED",
+          message: "Failed to load customer financial information."
+        });
+      }
+    }
+  );
+
 // ----- system controls -----
 app.get(
   API_PREFIX + "/admin/system/status",
