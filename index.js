@@ -3865,6 +3865,195 @@ app.get(
   }
 );
 
+
+// ===== ADMIN USER SECURITY ACTIONS V1 =====
+// Admin-only customer security actions.
+// These routes do not edit customer balances or ledger money.
+// Every successful security action creates an admin audit record.
+
+// ------------------------------------------------------------
+// ADMIN RESET FUND PIN
+// POST /api/admin/users/:userId/security/reset-fund-pin
+// Body: { "newPin": "123456", "reason": "..." }
+// ------------------------------------------------------------
+app.post(
+  API_PREFIX + "/admin/users/:userId/security/reset-fund-pin",
+  requireSaintAdmin,
+  verifyFirestore,
+  async (req, res) => {
+    try {
+      const userId = String(req.params.userId || "").trim();
+      const newPin = String(req.body?.newPin || "").trim();
+      const reason = String(
+        req.body?.reason || "Fund PIN reset by SAINT ADMIN."
+      ).trim().slice(0, 500);
+
+      if (!userId) {
+        return res.status(400).json({
+          success: false,
+          code: "USER_ID_REQUIRED",
+          message: "User ID is required."
+        });
+      }
+
+      if (!/^\d{6}$/.test(newPin)) {
+        return res.status(400).json({
+          success: false,
+          code: "INVALID_FUND_PIN",
+          message: "Fund PIN must contain exactly 6 digits."
+        });
+      }
+
+      const userRef = firestore.collection("users").doc(userId);
+      const userSnap = await userRef.get();
+
+      if (!userSnap.exists) {
+        return res.status(404).json({
+          success: false,
+          code: "USER_NOT_FOUND",
+          message: "Customer account was not found."
+        });
+      }
+
+      if (
+        !kendrick ||
+        typeof kendrick.saveFundPassword !== "function"
+      ) {
+        return res.status(503).json({
+          success: false,
+          code: "FUND_PIN_SERVICE_UNAVAILABLE",
+          message: "Fund PIN service is unavailable."
+        });
+      }
+
+      await kendrick.saveFundPassword(userRef, newPin);
+
+      await firestore.collection("admin_audit_logs").add({
+        adminUid: req.uid || null,
+        action: "ADMIN_FUND_PIN_RESET",
+        target: userId,
+        details: {
+          reason,
+          forcedByAdmin: true
+        },
+        createdAt: new Date()
+      });
+
+      return res.json({
+        success: true,
+        message: "Customer Fund PIN reset successfully.",
+        userId
+      });
+    } catch (error) {
+      console.error(
+        "[ADMIN FUND PIN RESET] Failed:",
+        error?.stack || error
+      );
+
+      return res.status(500).json({
+        success: false,
+        code: "ADMIN_FUND_PIN_RESET_FAILED",
+        message: "Failed to reset customer Fund PIN."
+      });
+    }
+  }
+);
+
+// ------------------------------------------------------------
+// ADMIN GENERATE LOGIN PASSWORD RESET LINK
+// POST /api/admin/users/:userId/security/login-reset-link
+// The Firebase Admin SDK generates the official reset link.
+// It does not directly send email from this backend.
+// ------------------------------------------------------------
+app.post(
+  API_PREFIX + "/admin/users/:userId/security/login-reset-link",
+  requireSaintAdmin,
+  verifyFirestore,
+  async (req, res) => {
+    try {
+      const userId = String(req.params.userId || "").trim();
+      const reason = String(
+        req.body?.reason || "Login password reset requested by SAINT ADMIN."
+      ).trim().slice(0, 500);
+
+      if (!userId) {
+        return res.status(400).json({
+          success: false,
+          code: "USER_ID_REQUIRED",
+          message: "User ID is required."
+        });
+      }
+
+      const userRef = firestore.collection("users").doc(userId);
+      const userSnap = await userRef.get();
+
+      if (!userSnap.exists) {
+        return res.status(404).json({
+          success: false,
+          code: "USER_NOT_FOUND",
+          message: "Customer account was not found."
+        });
+      }
+
+      const user = userSnap.data() || {};
+      const email = String(
+        user.email || user.emailAddress || ""
+      ).trim();
+
+      if (!email) {
+        return res.status(400).json({
+          success: false,
+          code: "USER_EMAIL_MISSING",
+          message: "Customer does not have an email address."
+        });
+      }
+
+      if (!auth || typeof auth.generatePasswordResetLink !== "function") {
+        return res.status(503).json({
+          success: false,
+          code: "AUTH_SERVICE_UNAVAILABLE",
+          message: "Firebase Authentication service is unavailable."
+        });
+      }
+
+      // Firebase Admin generates the official reset URL.
+      // The Control Room can present/copy this link for the customer.
+      const resetLink = await auth.generatePasswordResetLink(email);
+
+      await firestore.collection("admin_audit_logs").add({
+        adminUid: req.uid || null,
+        action: "ADMIN_LOGIN_PASSWORD_RESET_LINK_GENERATED",
+        target: userId,
+        details: {
+          reason,
+          email,
+          method: "FIREBASE_ADMIN_GENERATE_PASSWORD_RESET_LINK"
+        },
+        createdAt: new Date()
+      });
+
+      return res.json({
+        success: true,
+        message: "Login password reset link generated successfully.",
+        userId,
+        email,
+        resetLink
+      });
+    } catch (error) {
+      console.error(
+        "[ADMIN LOGIN PASSWORD RESET] Failed:",
+        error?.stack || error
+      );
+
+      return res.status(500).json({
+        success: false,
+        code: "ADMIN_LOGIN_PASSWORD_RESET_FAILED",
+        message: "Failed to generate login password reset link."
+      });
+    }
+  }
+);
+
 // ----- system controls -----
 app.get(
   API_PREFIX + "/admin/system/status",
