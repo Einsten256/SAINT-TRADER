@@ -2306,6 +2306,7 @@ app.get(
       const snapshot = await saintAdminCachedRead("admin:users", () => firestore.collection("users").get());
 
       const users = [];
+      const withdrawnByUser = await getSaintAdminWithdrawnTotals();
 
       snapshot.forEach((doc) => {
         const data = doc.data() || {};
@@ -2354,6 +2355,7 @@ app.get(
           balance,
           locked,
           is_frozen: isFrozen,
+          withdrawn_total_ugx: Number(withdrawnByUser[doc.id] || 0),
         };
 
         Object.keys(serialized).forEach((key) => {
