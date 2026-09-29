@@ -4257,8 +4257,19 @@ app.post(
   }
 
   // ------------------------------------------------------------
+  // ------------------------------------------------------------
   // SUPPORT CENTER
   // ------------------------------------------------------------
+  //
+  // IMPORTANT:
+  // Customer app uses:
+  //   support_tickets/{ticketId}
+  //   support_tickets/{ticketId}/messages
+  //
+  // SAINT ADMIN now uses the SAME collection so customer requests,
+  // admin replies, status changes, and conversation history stay
+  // in one source of truth.
+  //
 
   app.post(
     API_PREFIX + "/admin/support/messages",
@@ -4266,41 +4277,83 @@ app.post(
     verifyFirestore,
     async (req, res) => {
       try {
-        const userId = saintAdminV2String(req.body?.userId, "", 200);
-        const category = saintAdminV2String(req.body?.category, "GENERAL", 80).toUpperCase();
-        const subject = saintAdminV2String(req.body?.subject, "Customer Support", 200);
-        const message = saintAdminV2String(req.body?.message, "", 4000);
+        const userId = saintAdminV2String(
+          req.body?.userId,
+          "",
+          200
+        );
+
+        const category = saintAdminV2String(
+          req.body?.category,
+          "GENERAL",
+          80
+        );
+
+        const subject = saintAdminV2String(
+          req.body?.subject,
+          "Customer Support",
+          200
+        );
+
+        const message = saintAdminV2String(
+          req.body?.message,
+          "",
+          4000
+        );
 
         if (!userId || !message) {
           return res.status(400).json({
             success: false,
             code: "SUPPORT_FIELDS_REQUIRED",
-            message: "userId and message are required."
+            message: "userId and message are required.",
           });
         }
 
-        const ref = await firestore.collection("support_messages").add({
+        const now = new Date();
+
+        const ticketRef = firestore
+          .collection("support_tickets")
+          .doc();
+
+        const ticketNumber =
+          "SC-" +
+          Date.now().toString().slice(-10);
+
+        await ticketRef.set({
+          ticketNumber,
           userId,
           category,
           subject,
-          message,
-          senderType: "ADMIN",
-          adminUid: req.uid || null,
           status: "OPEN",
-          createdAt: new Date(),
-          updatedAt: new Date()
+          lastMessage: message,
+          lastMessageBy: "admin",
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        await ticketRef.collection("messages").add({
+          sender: "admin",
+          senderId: req.uid || null,
+          message,
+          createdAt: now,
         });
 
         return res.status(201).json({
           success: true,
-          messageId: ref.id
+          messageId: ticketRef.id,
+          ticketId: ticketRef.id,
+          ticketNumber,
         });
       } catch (error) {
-        console.error("[ADMIN SUPPORT] Failed:", error?.stack || error);
+        console.error(
+          "[ADMIN SUPPORT CREATE] Failed:",
+          error?.stack || error
+        );
+
         return res.status(500).json({
           success: false,
           code: "ADMIN_SUPPORT_CREATE_FAILED",
-          message: "Failed to create support message."
+          message: "Failed to create support message.",
         });
       }
     }
@@ -4312,17 +4365,26 @@ app.post(
     verifyFirestore,
     async (req, res) => {
       try {
-        const limit = saintAdminV2Limit(req.query?.limit, 50, 100);
-        const userId = saintAdminV2String(req.query?.userId, "", 200);
+        const limit = saintAdminV2Limit(
+          req.query?.limit,
+          50,
+          100
+        );
+
+        const userId = saintAdminV2String(
+          req.query?.userId,
+          "",
+          200
+        );
 
         let query = firestore
-          .collection("support_messages")
+          .collection("support_tickets")
           .orderBy("createdAt", "desc")
           .limit(limit);
 
         if (userId) {
           query = firestore
-            .collection("support_messages")
+            .collection("support_tickets")
             .where("userId", "==", userId)
             .limit(limit);
         }
@@ -4335,17 +4397,21 @@ app.post(
 
         return res.json({
           success: true,
-          messages: snap.docs.map(doc => ({
+          messages: snap.docs.map((doc) => ({
             id: doc.id,
-            ...doc.data()
-          }))
+            ...doc.data(),
+          })),
         });
       } catch (error) {
-        console.error("[ADMIN SUPPORT LIST] Failed:", error?.stack || error);
+        console.error(
+          "[ADMIN SUPPORT LIST] Failed:",
+          error?.stack || error
+        );
+
         return res.status(500).json({
           success: false,
           code: "ADMIN_SUPPORT_LIST_FAILED",
-          message: "Failed to load support messages."
+          message: "Failed to load support messages.",
         });
       }
     }
@@ -4357,46 +4423,108 @@ app.post(
     verifyFirestore,
     async (req, res) => {
       try {
-        const messageId = saintAdminV2String(req.params.messageId, "", 200);
-        const status = saintAdminV2String(req.body?.status, "", 40).toUpperCase();
-        const adminNote = saintAdminV2String(req.body?.adminNote, "", 2000);
+        const messageId = saintAdminV2String(
+          req.params.messageId,
+          "",
+          200
+        );
 
-        if (!messageId || !["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"].includes(status)) {
+        const status = saintAdminV2String(
+          req.body?.status,
+          "",
+          40
+        ).toUpperCase();
+
+        const adminNote = saintAdminV2String(
+          req.body?.adminNote,
+          "",
+          2000
+        );
+
+        if (
+          !messageId ||
+          !["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"].includes(status)
+        ) {
           return res.status(400).json({
             success: false,
             code: "SUPPORT_STATUS_INVALID",
-            message: "A valid support status is required."
+            message: "A valid support status is required.",
           });
         }
 
-        await firestore.collection("support_messages").doc(messageId).set({
-          status,
-          adminNote: adminNote || null,
-          updatedAt: new Date(),
-          updatedBy: req.uid || null
-        }, { merge: true });
+        const ticketRef = firestore
+          .collection("support_tickets")
+          .doc(messageId);
+
+        const ticketSnap = await ticketRef.get();
+
+        if (!ticketSnap.exists) {
+          return res.status(404).json({
+            success: false,
+            code: "SUPPORT_TICKET_NOT_FOUND",
+            message: "Support ticket was not found.",
+          });
+        }
+
+        const now = new Date();
+
+        // If the admin entered a reply/note, put it into the SAME
+        // messages subcollection used by the customer app.
+        if (adminNote) {
+          await ticketRef.collection("messages").add({
+            sender: "admin",
+            senderId: req.uid || null,
+            message: adminNote,
+            createdAt: now,
+          });
+        }
+
+        await ticketRef.set(
+          {
+            status,
+            adminNote: adminNote || null,
+            lastMessage: adminNote || ticketSnap.data()?.lastMessage || "",
+            lastMessageBy: adminNote ? "admin" : (
+              ticketSnap.data()?.lastMessageBy || "user"
+            ),
+            updatedAt: now,
+            updatedBy: req.uid || null,
+          },
+          { merge: true }
+        );
 
         await firestore.collection("admin_audit_logs").add({
           adminUid: req.uid || null,
           action: "ADMIN_SUPPORT_STATUS_UPDATED",
           target: messageId,
-          details: { status, adminNote: adminNote || null },
-          createdAt: new Date()
+          details: {
+            status,
+            adminNote: adminNote || null,
+          },
+          createdAt: now,
         });
 
-        return res.json({ success: true, messageId, status });
+        return res.json({
+          success: true,
+          messageId,
+          ticketId: messageId,
+          status,
+        });
       } catch (error) {
-        console.error("[ADMIN SUPPORT UPDATE] Failed:", error?.stack || error);
+        console.error(
+          "[ADMIN SUPPORT UPDATE] Failed:",
+          error?.stack || error
+        );
+
         return res.status(500).json({
           success: false,
           code: "ADMIN_SUPPORT_UPDATE_FAILED",
-          message: "Failed to update support message."
+          message: "Failed to update support message.",
         });
       }
     }
   );
 
-  // ------------------------------------------------------------
   // FINANCIAL CONTROL V2
   // ------------------------------------------------------------
 
@@ -5126,6 +5254,215 @@ app.get(
     }
   }
 );
+
+  // ============================================================
+  // SAINT ADMIN - CLEAR ALL CURRENT ACCOUNT FUNDS
+  // ============================================================
+  // Clears ONLY the customer's CURRENT balances:
+  //   locked_trading_capital_ugx -> 0
+  //   payout_balance_ugx         -> 0
+  //
+  // Historical recharge/withdrawal records are NOT deleted.
+  // Two ledger debit records are written in the SAME Firestore
+  // transaction as the balance update.
+  // ============================================================
+
+  app.post(
+    API_PREFIX + "/admin/users/:userId/clear-all-funds",
+    requireSaintAdmin,
+    verifyFirestore,
+    async (req, res) => {
+      try {
+        const userId = String(req.params.userId || "").trim();
+
+        if (!userId) {
+          return res.status(400).json({
+            success: false,
+            code: "USER_ID_REQUIRED",
+            message: "User ID is required."
+          });
+        }
+
+        const userRef = firestore.collection("users").doc(userId);
+        const userSnap = await userRef.get();
+
+        if (!userSnap.exists) {
+          return res.status(404).json({
+            success: false,
+            code: "USER_NOT_FOUND",
+            message: "Customer account was not found."
+          });
+        }
+
+        const user = userSnap.data() || {};
+
+        const lockedBefore = Math.max(
+          0,
+          Number(user.locked_trading_capital_ugx) || 0
+        );
+
+        const payoutBefore = Math.max(
+          0,
+          Number(user.payout_balance_ugx) || 0
+        );
+
+        const totalBefore = lockedBefore + payoutBefore;
+
+        if (totalBefore <= 0) {
+          return res.json({
+            success: true,
+            message: "Customer account already has zero current balance.",
+            userId,
+            lockedCapitalBeforeUgx: 0,
+            payoutBeforeUgx: 0,
+            totalClearedUgx: 0,
+            lockedCapitalAfterUgx: 0,
+            payoutAfterUgx: 0
+          });
+        }
+
+        const operationId =
+          "clear_all_" +
+          userId +
+          "_" +
+          Date.now();
+
+        await firestore.runTransaction(async (transaction) => {
+          const freshUserSnap = await transaction.get(userRef);
+
+          if (!freshUserSnap.exists) {
+            throw new Error("USER_NOT_FOUND");
+          }
+
+          const freshUser = freshUserSnap.data() || {};
+
+          const lockedCurrent = Math.max(
+            0,
+            Number(freshUser.locked_trading_capital_ugx) || 0
+          );
+
+          const payoutCurrent = Math.max(
+            0,
+            Number(freshUser.payout_balance_ugx) || 0
+          );
+
+          const lockedLedgerRef = firestore
+            .collection("ledger_transactions")
+            .doc(operationId + "_locked");
+
+          const payoutLedgerRef = firestore
+            .collection("ledger_transactions")
+            .doc(operationId + "_payout");
+
+          transaction.set(
+            userRef,
+            {
+              locked_trading_capital_ugx: 0,
+              payout_balance_ugx: 0,
+              updatedAt: FieldValue.serverTimestamp()
+            },
+            { merge: true }
+          );
+
+          if (lockedCurrent > 0) {
+            transaction.set(
+              lockedLedgerRef,
+              {
+                transactionId: operationId + "_locked",
+                ledgerTransactionId: operationId + "_locked",
+                userId,
+                type: "ADMIN_LOCKED_CAPITAL_DEBIT",
+                direction: "DEBIT",
+                amount: lockedCurrent,
+                amountUgx: lockedCurrent,
+                currency: "UGX",
+                source: "SAINT_ADMIN",
+                referenceId: operationId,
+                metadata: {
+                  adminId: req.uid || null,
+                  reason: "CLEAR_ALL_ACCOUNT_FUNDS",
+                  operationId,
+                  previousLockedTradingCapitalUgx: lockedCurrent,
+                  newLockedTradingCapitalUgx: 0
+                },
+                createdAt: FieldValue.serverTimestamp()
+              },
+              { merge: false }
+            );
+          }
+
+          if (payoutCurrent > 0) {
+            transaction.set(
+              payoutLedgerRef,
+              {
+                transactionId: operationId + "_payout",
+                ledgerTransactionId: operationId + "_payout",
+                userId,
+                type: "ADMIN_PAYOUT_DEBIT",
+                direction: "DEBIT",
+                amount: payoutCurrent,
+                amountUgx: payoutCurrent,
+                currency: "UGX",
+                source: "SAINT_ADMIN",
+                referenceId: operationId,
+                metadata: {
+                  adminId: req.uid || null,
+                  reason: "CLEAR_ALL_ACCOUNT_FUNDS",
+                  operationId,
+                  previousPayoutBalanceUgx: payoutCurrent,
+                  newPayoutBalanceUgx: 0
+                },
+                createdAt: FieldValue.serverTimestamp()
+              },
+              { merge: false }
+            );
+          }
+
+          const auditRef = firestore
+            .collection("admin_audit_logs")
+            .doc();
+
+          transaction.set(auditRef, {
+            adminUid: req.uid || null,
+            action: "CUSTOMER_ALL_FUNDS_CLEARED",
+            target: userId,
+            details: {
+              operationId,
+              lockedCapitalUgx: lockedCurrent,
+              payoutBalanceUgx: payoutCurrent,
+              totalClearedUgx: lockedCurrent + payoutCurrent
+            },
+            createdAt: FieldValue.serverTimestamp()
+          });
+        });
+
+        return res.json({
+          success: true,
+          message: "All current customer funds cleared successfully.",
+          userId,
+          lockedCapitalBeforeUgx: lockedBefore,
+          payoutBeforeUgx: payoutBefore,
+          totalClearedUgx: totalBefore,
+          lockedCapitalAfterUgx: 0,
+          payoutAfterUgx: 0,
+          totalAfterUgx: 0,
+          operationId
+        });
+      } catch (error) {
+        console.error(
+          "[ADMIN CLEAR ALL FUNDS] Failed:",
+          error?.stack || error
+        );
+
+        return res.status(500).json({
+          success: false,
+          code: "CLEAR_ALL_FUNDS_FAILED",
+          message: error?.message || "Failed to clear customer funds."
+        });
+      }
+    }
+  );
+
 // ----- audit -----
 app.get(
   API_PREFIX + "/admin/audit",
