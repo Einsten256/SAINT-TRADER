@@ -4222,6 +4222,558 @@ app.post(
     }
   );
 
+
+
+  // ============================================================
+  // SAINT ADMIN BACKEND V2 BUNDLE
+  // ============================================================
+  // Customer support, financial mutations, audit, error records,
+  // and consolidated Control Room data endpoints.
+  //
+  // All routes require SAINT ADMIN authentication.
+  // Financial mutations delegate to the canonical ledger service.
+  // No MT5 integration is introduced by this bundle.
+  // ============================================================
+
+  function saintAdminV2String(value, fallback = "", max = 500) {
+    const text = String(value ?? fallback).trim();
+    return text.slice(0, max);
+  }
+
+  function saintAdminV2Limit(value, fallback = 50, max = 200) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(1, Math.min(Math.trunc(parsed), max));
+  }
+
+  // ------------------------------------------------------------
+  // SUPPORT CENTER
+  // ------------------------------------------------------------
+
+  app.post(
+    API_PREFIX + "/admin/support/messages",
+    requireSaintAdmin,
+    verifyFirestore,
+    async (req, res) => {
+      try {
+        const userId = saintAdminV2String(req.body?.userId, "", 200);
+        const category = saintAdminV2String(req.body?.category, "GENERAL", 80).toUpperCase();
+        const subject = saintAdminV2String(req.body?.subject, "Customer Support", 200);
+        const message = saintAdminV2String(req.body?.message, "", 4000);
+
+        if (!userId || !message) {
+          return res.status(400).json({
+            success: false,
+            code: "SUPPORT_FIELDS_REQUIRED",
+            message: "userId and message are required."
+          });
+        }
+
+        const ref = await firestore.collection("support_messages").add({
+          userId,
+          category,
+          subject,
+          message,
+          senderType: "ADMIN",
+          adminUid: req.uid || null,
+          status: "OPEN",
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+
+        return res.status(201).json({
+          success: true,
+          messageId: ref.id
+        });
+      } catch (error) {
+        console.error("[ADMIN SUPPORT] Failed:", error?.stack || error);
+        return res.status(500).json({
+          success: false,
+          code: "ADMIN_SUPPORT_CREATE_FAILED",
+          message: "Failed to create support message."
+        });
+      }
+    }
+  );
+
+  app.get(
+    API_PREFIX + "/admin/support/messages",
+    requireSaintAdmin,
+    verifyFirestore,
+    async (req, res) => {
+      try {
+        const limit = saintAdminV2Limit(req.query?.limit, 50, 100);
+        const userId = saintAdminV2String(req.query?.userId, "", 200);
+
+        let query = firestore
+          .collection("support_messages")
+          .orderBy("createdAt", "desc")
+          .limit(limit);
+
+        if (userId) {
+          query = firestore
+            .collection("support_messages")
+            .where("userId", "==", userId)
+            .limit(limit);
+        }
+
+        const snap = await saintAdminCachedRead(
+          `admin:support:${userId || "all"}:${limit}`,
+          () => query.get(),
+          5000
+        );
+
+        return res.json({
+          success: true,
+          messages: snap.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }))
+        });
+      } catch (error) {
+        console.error("[ADMIN SUPPORT LIST] Failed:", error?.stack || error);
+        return res.status(500).json({
+          success: false,
+          code: "ADMIN_SUPPORT_LIST_FAILED",
+          message: "Failed to load support messages."
+        });
+      }
+    }
+  );
+
+  app.patch(
+    API_PREFIX + "/admin/support/messages/:messageId",
+    requireSaintAdmin,
+    verifyFirestore,
+    async (req, res) => {
+      try {
+        const messageId = saintAdminV2String(req.params.messageId, "", 200);
+        const status = saintAdminV2String(req.body?.status, "", 40).toUpperCase();
+        const adminNote = saintAdminV2String(req.body?.adminNote, "", 2000);
+
+        if (!messageId || !["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"].includes(status)) {
+          return res.status(400).json({
+            success: false,
+            code: "SUPPORT_STATUS_INVALID",
+            message: "A valid support status is required."
+          });
+        }
+
+        await firestore.collection("support_messages").doc(messageId).set({
+          status,
+          adminNote: adminNote || null,
+          updatedAt: new Date(),
+          updatedBy: req.uid || null
+        }, { merge: true });
+
+        await firestore.collection("admin_audit_logs").add({
+          adminUid: req.uid || null,
+          action: "ADMIN_SUPPORT_STATUS_UPDATED",
+          target: messageId,
+          details: { status, adminNote: adminNote || null },
+          createdAt: new Date()
+        });
+
+        return res.json({ success: true, messageId, status });
+      } catch (error) {
+        console.error("[ADMIN SUPPORT UPDATE] Failed:", error?.stack || error);
+        return res.status(500).json({
+          success: false,
+          code: "ADMIN_SUPPORT_UPDATE_FAILED",
+          message: "Failed to update support message."
+        });
+      }
+    }
+  );
+
+  // ------------------------------------------------------------
+  // FINANCIAL CONTROL V2
+  // ------------------------------------------------------------
+
+  app.post(
+    API_PREFIX + "/admin/users/:userId/financial/adjust-capital",
+    requireSaintAdmin,
+    verifyFirestore,
+    async (req, res) => {
+      try {
+        const userId = saintAdminV2String(req.params.userId, "", 200);
+        const amountUgx = Number(req.body?.amountUgx);
+        const direction = saintAdminV2String(req.body?.direction, "CREDIT", 20).toUpperCase();
+        const reason = saintAdminV2String(req.body?.reason, "", 500);
+        const adjustmentId = saintAdminV2String(req.body?.adjustmentId, "", 200);
+
+        if (!userId || !Number.isFinite(amountUgx) || amountUgx <= 0 || !reason) {
+          return res.status(400).json({
+            success: false,
+            code: "CAPITAL_ADJUSTMENT_INVALID",
+            message: "userId, positive amountUgx, direction and reason are required."
+          });
+        }
+
+        if (!["CREDIT", "DEBIT"].includes(direction)) {
+          return res.status(400).json({
+            success: false,
+            code: "CAPITAL_DIRECTION_INVALID",
+            message: "Direction must be CREDIT or DEBIT."
+          });
+        }
+
+        if (!ledger || typeof ledger.adjustLockedTradingCapital !== "function") {
+          return res.status(503).json({
+            success: false,
+            code: "LEDGER_ADJUSTMENT_UNAVAILABLE",
+            message: "Locked capital adjustment service is unavailable."
+          });
+        }
+
+        const result = await ledger.adjustLockedTradingCapital({
+          userId,
+          amountUgx,
+          direction,
+          adminId: req.uid || null,
+          reason,
+          adjustmentId: adjustmentId || undefined
+        });
+
+        await firestore.collection("admin_audit_logs").add({
+          adminUid: req.uid || null,
+          action: "ADMIN_LOCKED_CAPITAL_ADJUSTMENT",
+          target: userId,
+          details: result,
+          createdAt: new Date()
+        });
+
+        return res.json({ success: true, ...result });
+      } catch (error) {
+        console.error("[ADMIN CAPITAL ADJUSTMENT] Failed:", error?.stack || error);
+        return res.status(400).json({
+          success: false,
+          code: "ADMIN_CAPITAL_ADJUSTMENT_FAILED",
+          message: error?.message || "Locked capital adjustment failed."
+        });
+      }
+    }
+  );
+
+  app.post(
+    API_PREFIX + "/admin/users/:userId/financial/adjust-payout",
+    requireSaintAdmin,
+    verifyFirestore,
+    async (req, res) => {
+      try {
+        const userId = saintAdminV2String(req.params.userId, "", 200);
+        const amountUgx = Number(req.body?.amountUgx);
+        const direction = saintAdminV2String(req.body?.direction, "CREDIT", 20).toUpperCase();
+        const reason = saintAdminV2String(req.body?.reason, "", 500);
+
+        if (!userId || !Number.isFinite(amountUgx) || amountUgx <= 0 || !reason) {
+          return res.status(400).json({
+            success: false,
+            code: "PAYOUT_ADJUSTMENT_INVALID",
+            message: "userId, positive amountUgx, direction and reason are required."
+          });
+        }
+
+        if (!["CREDIT", "DEBIT"].includes(direction)) {
+          return res.status(400).json({
+            success: false,
+            code: "PAYOUT_DIRECTION_INVALID",
+            message: "Direction must be CREDIT or DEBIT."
+          });
+        }
+
+        if (!ledger || typeof ledger.adjustPayoutBalance !== "function") {
+          return res.status(503).json({
+            success: false,
+            code: "LEDGER_PAYOUT_ADJUSTMENT_UNAVAILABLE",
+            message: "Payout adjustment service is unavailable."
+          });
+        }
+
+        const result = await ledger.adjustPayoutBalance({
+          userId,
+          amountUgx,
+          direction,
+          adminId: req.uid || null,
+          reason
+        });
+
+        await firestore.collection("admin_audit_logs").add({
+          adminUid: req.uid || null,
+          action: "ADMIN_PAYOUT_BALANCE_ADJUSTMENT",
+          target: userId,
+          details: result,
+          createdAt: new Date()
+        });
+
+        return res.json({ success: true, ...result });
+      } catch (error) {
+        console.error("[ADMIN PAYOUT ADJUSTMENT] Failed:", error?.stack || error);
+        return res.status(400).json({
+          success: false,
+          code: "ADMIN_PAYOUT_ADJUSTMENT_FAILED",
+          message: error?.message || "Payout adjustment failed."
+        });
+      }
+    }
+  );
+
+  // ------------------------------------------------------------
+  // AUDIT CENTER
+  // ------------------------------------------------------------
+
+  app.get(
+    API_PREFIX + "/admin/audit/logs",
+    requireSaintAdmin,
+    verifyFirestore,
+    async (req, res) => {
+      try {
+        const limit = saintAdminV2Limit(req.query?.limit, 50, 100);
+        const target = saintAdminV2String(req.query?.target, "", 200);
+
+        const cacheKey = `admin:audit-v2:${target}:${limit}`;
+        const snap = await saintAdminCachedRead(
+          cacheKey,
+          async () => {
+            if (target) {
+              return firestore.collection("admin_audit_logs")
+                .where("target", "==", target)
+                .limit(limit)
+                .get();
+            }
+            return firestore.collection("admin_audit_logs")
+              .orderBy("createdAt", "desc")
+              .limit(limit)
+              .get();
+          },
+          5000
+        );
+
+        return res.json({
+          success: true,
+          logs: snap.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }))
+        });
+      } catch (error) {
+        console.error("[ADMIN AUDIT] Failed:", error?.stack || error);
+        return res.status(500).json({
+          success: false,
+          code: "ADMIN_AUDIT_LOAD_FAILED",
+          message: "Failed to load audit logs."
+        });
+      }
+    }
+  );
+
+  // ------------------------------------------------------------
+  // ERROR CENTER
+  // ------------------------------------------------------------
+
+  app.post(
+    API_PREFIX + "/admin/errors",
+    requireSaintAdmin,
+    verifyFirestore,
+    async (req, res) => {
+      try {
+        const service = saintAdminV2String(req.body?.service, "unknown", 100);
+        const endpoint = saintAdminV2String(req.body?.endpoint, "", 300);
+        const errorCode = saintAdminV2String(req.body?.errorCode, "UNKNOWN_ERROR", 120);
+        const message = saintAdminV2String(req.body?.message, "", 1000);
+        const userId = saintAdminV2String(req.body?.userId, "", 200);
+        const requestId = saintAdminV2String(req.body?.requestId, "", 200);
+
+        if (!message) {
+          return res.status(400).json({
+            success: false,
+            code: "ERROR_MESSAGE_REQUIRED",
+            message: "Error message is required."
+          });
+        }
+
+        const ref = await firestore.collection("admin_error_logs").add({
+          service,
+          endpoint: endpoint || null,
+          errorCode,
+          message,
+          userId: userId || null,
+          requestId: requestId || null,
+          status: "OPEN",
+          createdAt: new Date(),
+          createdBy: req.uid || null
+        });
+
+        return res.status(201).json({
+          success: true,
+          errorId: ref.id
+        });
+      } catch (error) {
+        console.error("[ADMIN ERROR CENTER] Failed:", error?.stack || error);
+        return res.status(500).json({
+          success: false,
+          code: "ADMIN_ERROR_CREATE_FAILED",
+          message: "Failed to record error."
+        });
+      }
+    }
+  );
+
+  app.get(
+    API_PREFIX + "/admin/errors",
+    requireSaintAdmin,
+    verifyFirestore,
+    async (req, res) => {
+      try {
+        const limit = saintAdminV2Limit(req.query?.limit, 50, 100);
+        const status = saintAdminV2String(req.query?.status, "", 40).toUpperCase();
+
+        let query = firestore.collection("admin_error_logs").limit(limit);
+        if (status) query = query.where("status", "==", status);
+
+        const snap = await saintAdminCachedRead(
+          `admin:errors:${status || "all"}:${limit}`,
+          () => query.get(),
+          5000
+        );
+
+        return res.json({
+          success: true,
+          errors: snap.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }))
+        });
+      } catch (error) {
+        console.error("[ADMIN ERROR LIST] Failed:", error?.stack || error);
+        return res.status(500).json({
+          success: false,
+          code: "ADMIN_ERROR_LIST_FAILED",
+          message: "Failed to load error records."
+        });
+      }
+    }
+  );
+
+  app.patch(
+    API_PREFIX + "/admin/errors/:errorId",
+    requireSaintAdmin,
+    verifyFirestore,
+    async (req, res) => {
+      try {
+        const errorId = saintAdminV2String(req.params.errorId, "", 200);
+        const status = saintAdminV2String(req.body?.status, "", 40).toUpperCase();
+        const resolution = saintAdminV2String(req.body?.resolution, "", 2000);
+
+        if (!errorId || !["OPEN", "INVESTIGATING", "RESOLVED", "IGNORED"].includes(status)) {
+          return res.status(400).json({
+            success: false,
+            code: "ERROR_STATUS_INVALID",
+            message: "A valid error status is required."
+          });
+        }
+
+        await firestore.collection("admin_error_logs").doc(errorId).set({
+          status,
+          resolution: resolution || null,
+          resolvedBy: req.uid || null,
+          resolvedAt: status === "RESOLVED" ? new Date() : null,
+          updatedAt: new Date()
+        }, { merge: true });
+
+        return res.json({ success: true, errorId, status });
+      } catch (error) {
+        console.error("[ADMIN ERROR UPDATE] Failed:", error?.stack || error);
+        return res.status(500).json({
+          success: false,
+          code: "ADMIN_ERROR_UPDATE_FAILED",
+          message: "Failed to update error record."
+        });
+      }
+    }
+  );
+
+  // ------------------------------------------------------------
+  // CONSOLIDATED CONTROL ROOM SNAPSHOT
+  // ------------------------------------------------------------
+
+  app.get(
+    API_PREFIX + "/admin/control-room/snapshot",
+    requireSaintAdmin,
+    verifyFirestore,
+    async (req, res) => {
+      try {
+        let systemControl = {};
+
+        if (realtimeDb) {
+          const snap = await realtimeDb.ref("system_control").once("value");
+          systemControl = snap.val() || {};
+        }
+
+        let signalStatus = null;
+        try {
+          if (signal && typeof signal.getStatus === "function") {
+            signalStatus = await signal.getStatus();
+          }
+        } catch (error) {
+          signalStatus = {
+            available: false,
+            error: "SIGNAL_STATUS_UNAVAILABLE"
+          };
+        }
+
+        const [usersSnap, auditSnap] = await Promise.all([
+          saintAdminCachedRead(
+            "admin:v2:users",
+            () => firestore.collection("users").limit(200).get(),
+            10000
+          ),
+          saintAdminCachedRead(
+            "admin:v2:audit",
+            () => firestore.collection("admin_audit_logs").limit(50).get(),
+            5000
+          )
+        ]);
+
+        let frozenUsers = 0;
+        for (const doc of usersSnap.docs) {
+          if (doc.data()?.is_frozen === true) frozenUsers++;
+        }
+
+        return res.json({
+          success: true,
+          generatedAt: new Date().toISOString(),
+          services: {
+            firestore: true,
+            realtimeDatabase: Boolean(realtimeDb),
+            auth: Boolean(auth),
+            ledger: Boolean(ledger),
+            signals: Boolean(signal),
+            scheduler: Boolean(scheduler)
+          },
+          users: {
+            sampleCount: usersSnap.size,
+            frozenInSample: frozenUsers
+          },
+          systemControl,
+          signalStatus,
+          recentAuditCount: auditSnap.size,
+          mt5: {
+            connected: false,
+            status: "DISCONNECTED"
+          }
+        });
+      } catch (error) {
+        console.error("[ADMIN CONTROL ROOM V2] Failed:", error?.stack || error);
+        return res.status(500).json({
+          success: false,
+          code: "ADMIN_CONTROL_ROOM_SNAPSHOT_FAILED",
+          message: "Failed to load Control Room snapshot."
+        });
+      }
+    }
+  );
+
 // ----- system controls -----
 app.get(
   API_PREFIX + "/admin/system/status",
