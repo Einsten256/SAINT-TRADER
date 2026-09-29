@@ -2303,10 +2303,7 @@ app.get(
   verifyFirestore,
   async (req, res) => {
     try {
-      const snapshot =
-        await firestore
-          .collection("users")
-          .get();
+      const snapshot = await saintAdminCachedRead("admin:users", () => firestore.collection("users").get());
 
       const users = [];
 
@@ -2465,10 +2462,10 @@ app.get(
         withdrawalsSnapshot,
         redemptionsSnapshot,
       ] = await Promise.all([
-        firestore.collection('users').get(),
-        firestore.collection('recharges').get(),
-        firestore.collection('withdrawals').get(),
-        firestore.collection('signal_redemptions').get(),
+        saintAdminCachedRead("admin:users", () => firestore.collection("users").get()),
+        saintAdminCachedRead("admin:recharges:overview", () => firestore.collection("recharges").get()),
+        saintAdminCachedRead("admin:withdrawals:overview", () => firestore.collection("withdrawals").get()),
+        saintAdminCachedRead("admin:redemptions:overview", () => firestore.collection("signal_redemptions").get()),
       ]);
 
       let totalUsers = 0;
@@ -3466,13 +3463,32 @@ async function startBybitWebSocket() {
 // Complete SAINT ADMIN API layer. Inserted before app.listen().
 // Existing Saint Crypto routes/services remain untouched.
 
+const saintAdminFirestoreCache = new Map();
+
+async function saintAdminCachedRead(key, loader, ttlMs = 10000) {
+  const now = Date.now();
+  const existing = saintAdminFirestoreCache.get(key);
+  if (existing && existing.expiresAt > now) return existing.value;
+  if (existing && existing.promise) return existing.promise;
+  const promise = Promise.resolve().then(loader);
+  saintAdminFirestoreCache.set(key, { promise, expiresAt: now + ttlMs });
+  try {
+    const value = await promise;
+    saintAdminFirestoreCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+    return value;
+  } catch (error) {
+    saintAdminFirestoreCache.delete(key);
+    throw error;
+  }
+}
+
 // ----- finance queues -----
 app.get(
   API_PREFIX + "/admin/finance/recharges",
   requireSaintAdmin,
   async (req, res) => {
     try {
-      const snap = await firestore.collection("recharges").limit(300).get();
+      const snap = await saintAdminCachedRead("admin:recharges:300", () => firestore.collection("recharges").limit(300).get());
       const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       const all = req.query.all === "true";
       const recharges = all ? rows : rows.filter(x =>
@@ -3494,7 +3510,7 @@ app.get(
   requireSaintAdmin,
   async (req, res) => {
     try {
-      const snap = await firestore.collection("withdrawals").limit(300).get();
+      const snap = await saintAdminCachedRead("admin:withdrawals:300", () => firestore.collection("withdrawals").limit(300).get());
       const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       const all = req.query.all === "true";
       const withdrawals = all ? rows : rows.filter(x =>
@@ -4001,10 +4017,10 @@ app.get(
         ? Math.min(Math.max(rawLimit, 1), 500)
         : 300;
 
-      const snap = await firestore
-        .collection("ledger_transactions")
-        .limit(limit)
-        .get();
+      const snap = await saintAdminCachedRead(
+        "admin:ledger:" + limit,
+        () => firestore.collection("ledger_transactions").limit(limit).get()
+      );
 
       const transactions = snap.docs.map((d) => ({
         id: d.id,
@@ -4058,10 +4074,11 @@ app.get(
         req.query.target || ""
       ).trim();
 
-      const snap = await firestore
-        .collection("admin_audit_logs")
-        .limit(Math.max(limit, 300))
-        .get();
+      const auditLimit = Math.max(limit, 300);
+      const snap = await saintAdminCachedRead(
+        "admin:audit:" + auditLimit,
+        () => firestore.collection("admin_audit_logs").limit(auditLimit).get()
+      );
 
       const toMillis = (value) => {
         if (!value) return 0;
@@ -4155,7 +4172,7 @@ app.get(
         ? Math.min(Math.max(rawLimit, 1), 500)
         : 200;
 
-      const snap = await firestore.collection("signals").limit(limit).get();
+      const snap = await saintAdminCachedRead("admin:signals:" + limit, () => firestore.collection("signals").limit(limit).get());
       const signals = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
       signals.sort((a, b) => {
@@ -4225,10 +4242,10 @@ app.get(
       const userId = String(req.query.userId || "").trim();
       const requestedStatus = String(req.query.status || "").trim().toUpperCase();
 
-      const snap = await firestore
-        .collection("signal_redemptions")
-        .limit(limit)
-        .get();
+      const snap = await saintAdminCachedRead(
+        "admin:redemptions:" + limit,
+        () => firestore.collection("signal_redemptions").limit(limit).get()
+      );
 
       let redemptions = snap.docs.map(d => ({
         id: d.id,
