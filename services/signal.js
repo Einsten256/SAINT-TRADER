@@ -1257,65 +1257,43 @@ async function processDueSignalRedemptions(
   };
 }
 
-let payoutProcessorTimer =
-  null;
+let payoutProcessorTimer = null;
 
-function startSignalPayoutProcessor({
-  intervalMs = 15000,
-} = {}) {
+let signalPayoutProcessorBackoffUntil = 0;
+
+function startSignalPayoutProcessor({ intervalMs = 60000 } = {}) {
   if (payoutProcessorTimer) {
-    return {
-      success: true,
-      alreadyRunning: true,
-    };
+    return { success: true, alreadyRunning: true };
   }
 
-  const interval =
-    Math.max(
-      5000,
-      Number(intervalMs) ||
-        15000
-    );
+  const interval = Math.max(Number(intervalMs) || 60000, 60000);
 
-  const run =
-    async () => {
-      try {
-        await processDueSignalRedemptions(
-          100
-        );
-      } catch (error) {
-        console.error(
-          "❌ Signal payout processor:",
-          error.message
-        );
+  const run = async () => {
+    if (Date.now() < signalPayoutProcessorBackoffUntil) return;
+
+    try {
+      await processDueSignalRedemptions(100);
+      signalPayoutProcessorBackoffUntil = 0;
+    } catch (error) {
+      const message = String(error?.message || error);
+
+      if (message.includes("RESOURCE_EXHAUSTED") || message.includes("Quota exceeded")) {
+        signalPayoutProcessorBackoffUntil = Date.now() + 5 * 60 * 1000;
+        console.warn("⚠️ Signal payout processor: Firestore quota exceeded. Backing off for 5 minutes.");
+        return;
       }
-    };
+
+      console.error("❌ Signal payout processor:", message);
+    }
+  };
 
   run();
+  payoutProcessorTimer = setInterval(run, interval);
+  payoutProcessorTimer.unref?.();
 
-  payoutProcessorTimer =
-    setInterval(
-      run,
-      interval
-    );
+  console.log(`✅ Signal payout processor started (${interval}ms interval).`);
 
-  if (
-    typeof payoutProcessorTimer.unref ===
-    "function"
-  ) {
-    payoutProcessorTimer.unref();
-  }
-
-  console.log(
-    `✅ Signal payout processor started (${interval}ms interval).`
-  );
-
-  return {
-    success: true,
-    alreadyRunning: false,
-    intervalMs:
-      interval,
-  };
+  return { success: true, alreadyRunning: false, intervalMs: interval };
 }
 
 function stopSignalPayoutProcessor() {
