@@ -2306,7 +2306,7 @@ app.get(
       const snapshot = await saintAdminCachedRead("admin:users", () => firestore.collection("users").get());
 
       const users = [];
-      const withdrawnByUser = await getSaintAdminWithdrawnTotals();
+      // Withdrawn totals are read from the user document when available.
 
       snapshot.forEach((doc) => {
         const data = doc.data() || {};
@@ -2355,7 +2355,15 @@ app.get(
           balance,
           locked,
           is_frozen: isFrozen,
-          withdrawn_total_ugx: Number(withdrawnByUser[doc.id] || 0),
+          withdrawn_total_ugx: Number(
+            data.withdrawn_total_ugx ??
+            data.total_withdrawn_ugx ??
+            data.withdrawn_ugx ??
+            data.totalWithdrawnUgx ??
+            data.totalWithdrawn ??
+            data.withdrawn ??
+            0
+          ) || 0,
         };
 
         Object.keys(serialized).forEach((key) => {
@@ -4737,6 +4745,33 @@ app.post(
           )
         ]);
 
+        let totalLockedCapitalUgx = 0;
+        let totalPayoutBalanceUgx = 0;
+
+        for (const doc of usersSnap.docs) {
+          const user = doc.data() || {};
+
+          totalLockedCapitalUgx += Math.max(
+            0,
+            Number(
+              user.locked_trading_capital_ugx ??
+              user.locked_principal ??
+              user.locked ??
+              0
+            ) || 0
+          );
+
+          totalPayoutBalanceUgx += Math.max(
+            0,
+            Number(
+              user.payout_balance_ugx ??
+              user.withdrawable_profit_ugx ??
+              user.payout_balance ??
+              0
+            ) || 0
+          );
+        }
+
         let frozenUsers = 0;
         for (const doc of usersSnap.docs) {
           if (doc.data()?.is_frozen === true) frozenUsers++;
@@ -4760,6 +4795,8 @@ app.post(
           systemControl,
           signalStatus,
           recentAuditCount: auditSnap.size,
+          totalLockedCapitalUgx,
+          totalPayoutBalanceUgx,
           mt5: {
             connected: false,
             status: "DISCONNECTED"
