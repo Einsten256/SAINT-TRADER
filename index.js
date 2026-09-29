@@ -3734,6 +3734,137 @@ app.post(
   }
 );
 
+
+
+// ===== ADMIN USER CONTROL CENTER V1 =====
+// Safe, read-only customer control snapshot.
+//
+// V1 intentionally reads ONLY the customer's users document.
+// Historical financial totals will be added later using the
+// canonical ledger transaction types after they are verified.
+//
+// This route does NOT modify:
+// - customer money
+// - locked trading capital
+// - payout balance
+// - login credentials
+// - Fund PIN
+// - withdrawals
+// - recharges
+
+app.get(
+  API_PREFIX + "/admin/users/:userId/control",
+  requireSaintAdmin,
+  verifyFirestore,
+  async (req, res) => {
+    const userId = String(req.params.userId || "").trim();
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        code: "USER_ID_REQUIRED",
+        message: "User ID is required."
+      });
+    }
+
+    try {
+      const userRef = db.collection("users").doc(userId);
+      const userSnap = await userRef.get();
+
+      if (!userSnap.exists) {
+        return res.status(404).json({
+          success: false,
+          code: "USER_NOT_FOUND",
+          message: "Customer account was not found."
+        });
+      }
+
+      const user = userSnap.data() || {};
+
+      const lockedTradingCapitalUgx =
+        Number(user.locked_trading_capital_ugx) || 0;
+
+      const payoutBalanceUgx =
+        Number(user.payout_balance_ugx) || 0;
+
+      return res.json({
+        success: true,
+
+        user: {
+          id: userSnap.id,
+          uid: user.uid || userSnap.id,
+
+          name:
+            user.name ||
+            user.displayName ||
+            null,
+
+          email:
+            user.email ||
+            null,
+
+          phone:
+            user.phone ||
+            user.phoneNumber ||
+            null,
+
+          status:
+            user.status ||
+            null,
+
+          is_frozen:
+            user.is_frozen === true,
+
+          freezeReason:
+            user.freezeReason ||
+            null,
+
+          createdAt:
+            user.createdAt ||
+            user.created_at ||
+            null,
+
+          updatedAt:
+            user.updatedAt ||
+            user.updated_at ||
+            null,
+
+          lastLoginAt:
+            user.lastLoginAt ||
+            user.last_login_at ||
+            null,
+
+          hasFundPassword:
+            Boolean(
+              user.hasFundPassword ||
+              user.fundPasswordHash
+            ),
+
+          lockedTradingCapitalUgx:
+            Math.max(0, lockedTradingCapitalUgx),
+
+          payoutBalanceUgx:
+            Math.max(0, payoutBalanceUgx),
+
+          currency: "UGX"
+        }
+      });
+
+    } catch (error) {
+      console.error(
+        "[ADMIN USER CONTROL] Failed:",
+        error?.stack || error
+      );
+
+      return res.status(500).json({
+        success: false,
+        code: "ADMIN_USER_CONTROL_FAILED",
+        message: "Failed to load customer control information."
+      });
+    }
+  }
+);
+
 // ----- system controls -----
 app.get(
   API_PREFIX + "/admin/system/status",
