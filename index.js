@@ -4418,6 +4418,114 @@ app.post(
     }
   );
 
+  app.post(
+    API_PREFIX + "/admin/support/messages/:messageId/resolve",
+    requireSaintAdmin,
+    verifyFirestore,
+    async (req, res) => {
+      try {
+        const messageId = saintAdminV2String(
+          req.params.messageId,
+          "",
+          200
+        );
+
+        const status = saintAdminV2String(
+          req.body?.status,
+          "",
+          40
+        ).toUpperCase();
+
+        const adminNote = saintAdminV2String(
+          req.body?.adminNote,
+          "",
+          2000
+        );
+
+        if (
+          !messageId ||
+          !["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"].includes(status)
+        ) {
+          return res.status(400).json({
+            success: false,
+            code: "SUPPORT_STATUS_INVALID",
+            message: "A valid support status is required.",
+          });
+        }
+
+        const ticketRef = firestore
+          .collection("support_tickets")
+          .doc(messageId);
+
+        const ticketSnap = await ticketRef.get();
+
+        if (!ticketSnap.exists) {
+          return res.status(404).json({
+            success: false,
+            code: "SUPPORT_TICKET_NOT_FOUND",
+            message: "Support ticket was not found.",
+          });
+        }
+
+        const now = new Date();
+
+        // If the admin entered a reply/note, put it into the SAME
+        // messages subcollection used by the customer app.
+        if (adminNote) {
+          await ticketRef.collection("messages").add({
+            sender: "admin",
+            senderId: req.uid || null,
+            message: adminNote,
+            createdAt: now,
+          });
+        }
+
+        await ticketRef.set(
+          {
+            status,
+            adminNote: adminNote || null,
+            lastMessage: adminNote || ticketSnap.data()?.lastMessage || "",
+            lastMessageBy: adminNote ? "admin" : (
+              ticketSnap.data()?.lastMessageBy || "user"
+            ),
+            updatedAt: now,
+            updatedBy: req.uid || null,
+          },
+          { merge: true }
+        );
+
+        await firestore.collection("admin_audit_logs").add({
+          adminUid: req.uid || null,
+          action: "ADMIN_SUPPORT_STATUS_UPDATED",
+          target: messageId,
+          details: {
+            status,
+            adminNote: adminNote || null,
+          },
+          createdAt: now,
+        });
+
+        return res.json({
+          success: true,
+          messageId,
+          ticketId: messageId,
+          status,
+        });
+      } catch (error) {
+        console.error(
+          "[ADMIN SUPPORT UPDATE] Failed:",
+          error?.stack || error
+        );
+
+        return res.status(500).json({
+          success: false,
+          code: "ADMIN_SUPPORT_UPDATE_FAILED",
+          message: "Failed to update support message.",
+        });
+      }
+    }
+  );
+
   app.patch(
     API_PREFIX + "/admin/support/messages/:messageId",
     requireSaintAdmin,
